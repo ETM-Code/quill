@@ -1,0 +1,444 @@
+import { Editor, Extension } from '@tiptap/core'
+import StarterKit from '@tiptap/starter-kit'
+import { Markdown } from '@tiptap/markdown'
+import Placeholder from '@tiptap/extension-placeholder'
+import Typography from '@tiptap/extension-typography'
+import { Mathematics, migrateMathStrings } from '@tiptap/extension-mathematics'
+
+// Load KaTeX CSS immediately
+import 'katex/dist/katex.min.css'
+
+// State
+let editor: Editor
+let isModified = false
+let currentFilename = 'untitled.md'
+let currentFilePath: string | null = null
+let codeHighlightingLoaded = false
+
+// DOM Elements
+let filenameEl: HTMLElement
+let modifiedIndicator: HTMLElement
+
+// Shared KaTeX config
+const katexMacros = {
+  '\\R': '\\mathbb{R}',
+  '\\N': '\\mathbb{N}',
+  '\\Z': '\\mathbb{Z}',
+  '\\Q': '\\mathbb{Q}',
+  '\\C': '\\mathbb{C}',
+}
+
+// Build extensions with optional code highlighting
+function buildExtensions(codeBlockLowlight?: any) {
+  const extensions = [
+    StarterKit.configure({
+      codeBlock: codeBlockLowlight ? false : undefined,
+    }),
+    Markdown,
+    Placeholder.configure({
+      placeholder: 'Start writing...',
+    }),
+    Typography,
+    Mathematics.configure({
+      inlineOptions: {
+        onClick: (node: any, pos: number) => {
+          const latex = prompt('Edit LaTeX:', node.attrs.latex)
+          if (latex !== null && latex !== '') {
+            editor.chain().setNodeSelection(pos).updateInlineMath({ latex }).focus().run()
+          }
+        },
+      },
+      blockOptions: {
+        onClick: (node: any, pos: number) => {
+          const latex = prompt('Edit LaTeX:', node.attrs.latex)
+          if (latex !== null && latex !== '') {
+            editor.chain().setNodeSelection(pos).updateBlockMath({ latex }).focus().run()
+          }
+        },
+      },
+      katexOptions: {
+        throwOnError: false,
+        macros: katexMacros,
+      },
+    }),
+    CodeBlockTrigger,
+  ]
+
+  if (codeBlockLowlight) {
+    extensions.splice(1, 0, codeBlockLowlight)
+  }
+
+  return extensions
+}
+
+// Debounce utility
+function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
+  let timeoutId: ReturnType<typeof setTimeout>
+  return ((...args: any[]) => {
+    clearTimeout(timeoutId)
+    timeoutId = setTimeout(() => fn(...args), ms)
+  }) as T
+}
+
+// Migrate math strings (debounced to avoid running on every keystroke)
+const debouncedMigrateMath = debounce(() => {
+  if (editor) {
+    migrateMathStrings(editor)
+  }
+}, 300)
+
+// Initialize editor
+function createEditor(content: any = '') {
+  editor = new Editor({
+    element: document.getElementById('editor')!,
+    extensions: buildExtensions(),
+    content,
+    autofocus: true,
+    editorProps: {
+      attributes: {
+        class: 'tiptap',
+      },
+    },
+    onCreate: ({ editor: currentEditor }) => {
+      // Migrate any existing $...$ patterns to math nodes
+      migrateMathStrings(currentEditor)
+    },
+    onUpdate: () => {
+      // Guard to avoid redundant DOM updates
+      if (!isModified) {
+        setModified(true)
+      }
+      // Check for new math patterns (debounced)
+      debouncedMigrateMath()
+    },
+  })
+
+  return editor
+}
+
+// Extension to detect code blocks and lazy-load highlighting
+const CodeBlockTrigger = Extension.create({
+  name: 'codeBlockTrigger',
+
+  addKeyboardShortcuts() {
+    return {
+      // Detect ``` for code blocks
+      '`': () => {
+        const { state } = this.editor
+        const { from } = state.selection
+        const textBefore = state.doc.textBetween(Math.max(0, from - 2), from)
+
+        if (textBefore === '``' && !codeHighlightingLoaded) {
+          loadCodeHighlighting()
+        }
+        return false
+      },
+    }
+  },
+})
+
+// Lazy load code highlighting
+async function loadCodeHighlighting(): Promise<void> {
+  if (codeHighlightingLoaded) return
+  codeHighlightingLoaded = true
+
+  try {
+    // Load imports first
+    const [{ CodeBlockLowlight }, { common, createLowlight }] = await Promise.all([
+      import('@tiptap/extension-code-block-lowlight'),
+      import('lowlight'),
+    ])
+
+    const lowlight = createLowlight(common)
+
+    // Capture content AFTER imports complete to avoid losing edits during await
+    const snapshot = editor.getJSON()
+    const { from } = editor.state.selection
+
+    editor.destroy()
+
+    const codeBlockExt = CodeBlockLowlight.configure({
+      lowlight,
+      defaultLanguage: 'plaintext',
+    })
+
+    editor = new Editor({
+      element: document.getElementById('editor')!,
+      extensions: buildExtensions(codeBlockExt),
+      content: snapshot, // Use JSON to preserve structure
+      autofocus: true,
+      editorProps: {
+        attributes: {
+          class: 'tiptap',
+        },
+      },
+      onCreate: ({ editor: currentEditor }) => {
+        migrateMathStrings(currentEditor)
+      },
+      onUpdate: () => {
+        if (!isModified) {
+          setModified(true)
+        }
+        debouncedMigrateMath()
+      },
+    })
+
+    // Try to restore cursor position
+    try {
+      editor.commands.focus()
+      editor.commands.setTextSelection(Math.min(from, editor.state.doc.content.size))
+    } catch {
+      // Ignore cursor restore errors
+    }
+
+    console.log('Code highlighting loaded')
+  } catch (e) {
+    console.error('Failed to load code highlighting:', e)
+    codeHighlightingLoaded = false
+  }
+}
+
+// Check if content has code blocks and load highlighting if needed
+async function ensureCodeHighlightingForContent(content: string): Promise<void> {
+  if (!codeHighlightingLoaded && content.includes('```')) {
+    await loadCodeHighlighting()
+  }
+}
+
+// UI State
+function setModified(modified: boolean) {
+  isModified = modified
+  modifiedIndicator.classList.toggle('hidden', !modified)
+}
+
+function setFilename(name: string) {
+  currentFilename = name
+  filenameEl.textContent = name
+  document.title = `${name} - Quill`
+}
+
+// Extract filename from path (cross-platform)
+function getBasename(filePath: string): string {
+  // Handle both Unix and Windows paths
+  const parts = filePath.split(/[/\\]/)
+  return parts[parts.length - 1] || 'untitled.md'
+}
+
+// Confirm discarding unsaved changes
+async function confirmDiscardChanges(): Promise<boolean> {
+  if (!isModified) return true
+
+  try {
+    const { ask } = await import('@tauri-apps/plugin-dialog')
+    return await ask('You have unsaved changes. Discard them?', {
+      title: 'Unsaved Changes',
+      kind: 'warning',
+    })
+  } catch {
+    // Fallback to browser confirm if Tauri dialog fails
+    return window.confirm('You have unsaved changes. Discard them?')
+  }
+}
+
+// Keyboard shortcuts
+function setupKeyboardShortcuts() {
+  document.addEventListener('keydown', async (e) => {
+    const isMod = e.metaKey || e.ctrlKey
+
+    // Cmd+S - Save
+    if (isMod && e.key === 's') {
+      e.preventDefault()
+      await saveFile()
+    }
+
+    // Cmd+O - Open
+    if (isMod && e.key === 'o') {
+      e.preventDefault()
+      await openFile()
+    }
+
+    // Cmd+N - New
+    if (isMod && e.key === 'n') {
+      e.preventDefault()
+      await newFile()
+    }
+  })
+}
+
+// Get markdown content from editor
+function getMarkdownContent(): string {
+  // Use the markdown extension's storage API
+  const storage = editor.storage as any
+  if (storage?.markdown?.getMarkdown) {
+    return storage.markdown.getMarkdown()
+  }
+  // Last resort: HTML (shouldn't happen with Markdown extension)
+  return editor.getHTML()
+}
+
+// Set markdown content in editor
+function setMarkdownContent(markdown: string): void {
+  const storage = editor.storage as any
+  if (storage?.markdown?.setMarkdown) {
+    storage.markdown.setMarkdown(markdown)
+  } else {
+    // Fallback: parse markdown and set as JSON
+    // The Markdown extension should handle this via setContent with proper parsing
+    editor.commands.setContent(markdown)
+  }
+}
+
+// File operations (Tauri)
+async function saveFile() {
+  try {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const { writeTextFile } = await import('@tauri-apps/plugin-fs')
+
+    const markdown = getMarkdownContent()
+
+    // If we already have a file path, save directly
+    const targetPath = currentFilePath ?? await save({
+      defaultPath: currentFilename,
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    })
+
+    if (targetPath) {
+      await writeTextFile(targetPath, markdown)
+      currentFilePath = targetPath
+      setFilename(getBasename(targetPath))
+      setModified(false)
+    }
+  } catch (e) {
+    console.error('Save failed:', e)
+  }
+}
+
+async function openFile() {
+  // Confirm before discarding unsaved changes
+  if (!await confirmDiscardChanges()) return
+
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+
+    const filePath = await open({
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }],
+    })
+
+    if (filePath && typeof filePath === 'string') {
+      const content = await readTextFile(filePath)
+
+      // Load code highlighting if content has code blocks
+      await ensureCodeHighlightingForContent(content)
+
+      // Set content using markdown API
+      setMarkdownContent(content)
+
+      currentFilePath = filePath
+      setFilename(getBasename(filePath))
+      setModified(false)
+    }
+  } catch (e) {
+    console.error('Open failed:', e)
+  }
+}
+
+async function newFile() {
+  // Confirm before discarding unsaved changes
+  if (!await confirmDiscardChanges()) return
+
+  editor.commands.clearContent()
+  currentFilePath = null
+  setFilename('untitled.md')
+  setModified(false)
+}
+
+// Open a file by path (used by file associations)
+async function openFilePath(filePath: string) {
+  try {
+    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    const content = await readTextFile(filePath)
+
+    // Load code highlighting if needed
+    await ensureCodeHighlightingForContent(content)
+
+    // Set content
+    setMarkdownContent(content)
+
+    currentFilePath = filePath
+    setFilename(getBasename(filePath))
+    setModified(false)
+  } catch (e) {
+    console.error('Failed to open file:', e)
+  }
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', async () => {
+  // Initialize DOM element references
+  filenameEl = document.getElementById('filename')!
+  modifiedIndicator = document.getElementById('modified-indicator')!
+
+  createEditor()
+  setupKeyboardShortcuts()
+  setFilename('untitled.md')
+
+  // Check if app was opened with a file (poll a few times for macOS Apple Events timing)
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+
+    const checkForInitialFile = async (): Promise<boolean> => {
+      const initialFile = await invoke<string | null>('get_initial_file')
+      if (initialFile) {
+        await openFilePath(initialFile)
+        return true
+      }
+      return false
+    }
+
+    // Try immediately, then poll a couple more times for macOS timing
+    if (!await checkForInitialFile()) {
+      setTimeout(async () => {
+        if (!await checkForInitialFile()) {
+          setTimeout(checkForInitialFile, 200)
+        }
+      }, 100)
+    }
+  } catch (e) {
+    console.error('Failed to get initial file:', e)
+  }
+
+  // Listen for files opened while app is running (macOS "Open With")
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    await listen<string>('open-file', async (event) => {
+      console.log('open-file event received:', event.payload)
+      if (await confirmDiscardChanges()) {
+        await openFilePath(event.payload)
+      }
+    })
+  } catch (e) {
+    console.error('Failed to set up file listener:', e)
+  }
+
+  // Also listen for deep-link events (file associations)
+  try {
+    const { onOpenUrl } = await import('@tauri-apps/plugin-deep-link')
+    await onOpenUrl(async (urls) => {
+      console.log('deep-link onOpenUrl received:', urls)
+      for (const url of urls) {
+        // Handle file:// URLs
+        if (url.startsWith('file://')) {
+          const filePath = decodeURIComponent(url.replace('file://', ''))
+          console.log('Opening file from deep-link:', filePath)
+          if (await confirmDiscardChanges()) {
+            await openFilePath(filePath)
+          }
+          break // Only open first file
+        }
+      }
+    })
+  } catch (e) {
+    console.error('Failed to set up deep-link listener:', e)
+  }
+})

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quill</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header id="titlebar" data-tauri-drag-region>
+        <div class="traffic-lights-spacer"></div>
+        <div class="title" data-tauri-drag-region>
+          <span id="filename">untitled.md</span>
+          <span id="modified-indicator" class="hidden">*</span>
+        </div>
+        <div class="titlebar-spacer"></div>
+      </header>
+      <main id="editor-container">
+        <div id="editor"></div>
+      </main>
+    </div>
+  </body>
+</html>
