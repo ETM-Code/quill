@@ -104,6 +104,20 @@ fn create_editor_window(
     // Open devtools automatically for debugging
     #[cfg(debug_assertions)]
     _window.open_devtools();
+
+    // Safety net: if frontend-driven show() is blocked/fails, force-show editor windows.
+    if label != "keepalive" {
+        let app_handle = app.clone();
+        let label = label.to_string();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if let Some(window) = app_handle.get_webview_window(&label) {
+                if let Ok(false) = window.is_visible() {
+                    let _ = window.show();
+                }
+            }
+        });
+    }
 }
 
 fn ensure_keepalive_window(app: &tauri::AppHandle) {
