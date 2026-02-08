@@ -3,6 +3,7 @@ import {
   extractBlockMathLatex,
   findFencedBlockMathRanges,
   findInlineMathRanges,
+  shouldRunMathMigrationForTransaction,
   stripSingleDollarWrappers,
 } from './math-migration'
 
@@ -104,5 +105,28 @@ describe('stripSingleDollarWrappers', () => {
   test('returns null when no leading/trailing dollar pair exists', () => {
     expect(stripSingleDollarWrappers('Block:', '$ suffix')).toBeNull()
     expect(stripSingleDollarWrappers('Block: $', ' suffix')).toBeNull()
+  })
+})
+
+describe('shouldRunMathMigrationForTransaction', () => {
+  test('returns false when document did not change', () => {
+    expect(shouldRunMathMigrationForTransaction({
+      docChanged: false,
+      steps: [{ toJSON: () => ({ text: '$x$' }) }],
+    })).toBeFalse()
+  })
+
+  test('returns true when changed steps include dollar syntax', () => {
+    expect(shouldRunMathMigrationForTransaction({
+      docChanged: true,
+      steps: [{ toJSON: () => ({ slice: [{ text: '$x$' }] }) }],
+    })).toBeTrue()
+  })
+
+  test('returns false when changed steps contain no dollar syntax', () => {
+    expect(shouldRunMathMigrationForTransaction({
+      docChanged: true,
+      steps: [{ toJSON: () => ({ slice: [{ text: 'plain text' }] }) }],
+    })).toBeFalse()
   })
 })

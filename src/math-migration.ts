@@ -6,6 +6,11 @@ type BlockMathFenceRange = {
   latex: string
 }
 
+type TransactionLike = {
+  docChanged?: boolean
+  steps?: Array<{ toJSON?: () => unknown }>
+}
+
 function isFence(text: string): boolean {
   return text.trim() === '$$'
 }
@@ -60,6 +65,40 @@ function posOfTopLevelChild(doc: Editor['state']['doc'], index: number): number 
     pos += doc.child(i).nodeSize
   }
   return pos
+}
+
+function containsDollarSign(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return value.includes('$')
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(containsDollarSign)
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.values(value).some(containsDollarSign)
+  }
+
+  return false
+}
+
+export function shouldRunMathMigrationForTransaction(transaction: TransactionLike): boolean {
+  if (!transaction.docChanged) {
+    return false
+  }
+
+  const steps = transaction.steps ?? []
+  if (steps.length === 0) {
+    return false
+  }
+
+  return steps.some(step => {
+    if (!step || typeof step.toJSON !== 'function') {
+      return false
+    }
+    return containsDollarSign(step.toJSON())
+  })
 }
 
 export function extractBlockMathLatex(text: string): string | null {
@@ -340,6 +379,10 @@ export function migrateFencedBlockMathParagraphs(editor: Editor): void {
 }
 
 export function migrateAllMathStrings(editor: Editor): void {
+  if (!editor.state.doc.textContent.includes('$')) {
+    return
+  }
+
   cleanupInlineMathDoubleDollarArtifacts(editor)
   migrateInlineMathText(editor)
   migrateBlockMathParagraphs(editor)

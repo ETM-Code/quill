@@ -5,7 +5,7 @@ import Placeholder from '@tiptap/extension-placeholder'
 import Typography from '@tiptap/extension-typography'
 import { Mathematics } from '@tiptap/extension-mathematics'
 import { getMarkdownFromEditor, setMarkdownInEditor } from './editor-markdown'
-import { migrateAllMathStrings } from './math-migration'
+import { migrateAllMathStrings, shouldRunMathMigrationForTransaction } from './math-migration'
 import { selectStartupFiles } from './startup-files'
 
 // Load KaTeX CSS immediately
@@ -106,13 +106,15 @@ function createEditor(content: any = '') {
       // Migrate any existing $...$ patterns to math nodes
       migrateAllMathStrings(currentEditor)
     },
-    onUpdate: () => {
+    onUpdate: ({ transaction }) => {
       // Guard to avoid redundant DOM updates
       if (!isModified) {
         setModified(true)
       }
-      // Check for new math patterns (debounced)
-      debouncedMigrateMath()
+      // Only run expensive math migration when this update introduced math syntax.
+      if (shouldRunMathMigrationForTransaction(transaction as any)) {
+        debouncedMigrateMath()
+      }
     },
   })
 
@@ -178,11 +180,13 @@ async function loadCodeHighlighting(): Promise<void> {
       onCreate: ({ editor: currentEditor }) => {
         migrateAllMathStrings(currentEditor)
       },
-      onUpdate: () => {
+      onUpdate: ({ transaction }) => {
         if (!isModified) {
           setModified(true)
         }
-        debouncedMigrateMath()
+        if (shouldRunMathMigrationForTransaction(transaction as any)) {
+          debouncedMigrateMath()
+        }
       },
     })
 
