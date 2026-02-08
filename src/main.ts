@@ -3,9 +3,12 @@ import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
 import Placeholder from '@tiptap/extension-placeholder'
 import Typography from '@tiptap/extension-typography'
+import { Mathematics } from '@tiptap/extension-mathematics'
 import { getMarkdownFromEditor, setMarkdownInEditor } from './editor-markdown'
 import { migrateAllMathStrings, shouldRunMathMigrationForTransaction } from './math-migration'
 import { selectStartupFiles } from './startup-files'
+
+// Load KaTeX CSS immediately
 import 'katex/dist/katex.min.css'
 
 // State
@@ -14,10 +17,6 @@ let isModified = false
 let currentFilename = 'untitled.md'
 let currentFilePath: string | null = null
 let codeHighlightingLoaded = false
-let codeBlockExtension: any | null = null
-let mathSupportLoaded = false
-let mathExtension: any | null = null
-let mathLoadPromise: Promise<void> | null = null
 
 // DOM Elements
 let filenameEl: HTMLElement
@@ -32,11 +31,8 @@ const katexMacros = {
   '\\C': '\\mathbb{C}',
 }
 
-// Build extensions with optional code highlighting and math support
-function buildExtensions(
-  codeBlockLowlight?: any,
-  mathematicsExtension?: any,
-) {
+// Build extensions with optional code highlighting
+function buildExtensions(codeBlockLowlight?: any) {
   const extensions = [
     StarterKit.configure({
       codeBlock: codeBlockLowlight ? false : undefined,
@@ -46,12 +42,30 @@ function buildExtensions(
       placeholder: 'Start writing...',
     }),
     Typography,
+    Mathematics.configure({
+      inlineOptions: {
+        onClick: (node: any, pos: number) => {
+          const latex = prompt('Edit LaTeX:', node.attrs.latex)
+          if (latex !== null && latex !== '') {
+            editor.chain().setNodeSelection(pos).updateInlineMath({ latex }).focus().run()
+          }
+        },
+      },
+      blockOptions: {
+        onClick: (node: any, pos: number) => {
+          const latex = prompt('Edit LaTeX:', node.attrs.latex)
+          if (latex !== null && latex !== '') {
+            editor.chain().setNodeSelection(pos).updateBlockMath({ latex }).focus().run()
+          }
+        },
+      },
+      katexOptions: {
+        throwOnError: false,
+        macros: katexMacros,
+      },
+    }),
     CodeBlockTrigger,
   ]
-
-  if (mathematicsExtension) {
-    extensions.splice(4, 0, mathematicsExtension)
-  }
 
   if (codeBlockLowlight) {
     extensions.splice(1, 0, codeBlockLowlight)
@@ -71,72 +85,16 @@ function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
 
 // Migrate math strings (debounced to avoid running on every keystroke)
 const debouncedMigrateMath = debounce(() => {
-  if (editor && mathSupportLoaded) {
+  if (editor) {
     migrateAllMathStrings(editor)
   }
 }, 300)
-
-function maybeRunMathMigration(currentEditor: Editor): void {
-  if (mathSupportLoaded) {
-    migrateAllMathStrings(currentEditor)
-  }
-}
-
-function handleEditorUpdate(transaction: any): void {
-  if (!isModified) {
-    setModified(true)
-  }
-
-  if (!shouldRunMathMigrationForTransaction(transaction)) {
-    return
-  }
-
-  if (!mathSupportLoaded) {
-    void loadMathSupport().then(() => {
-      debouncedMigrateMath()
-    })
-    return
-  }
-
-  debouncedMigrateMath()
-}
-
-function rebuildEditor(content: any, cursorPos?: number): void {
-  editor.destroy()
-
-  editor = new Editor({
-    element: document.getElementById('editor')!,
-    extensions: buildExtensions(codeBlockExtension, mathExtension),
-    content,
-    autofocus: true,
-    editorProps: {
-      attributes: {
-        class: 'tiptap',
-      },
-    },
-    onCreate: ({ editor: currentEditor }) => {
-      maybeRunMathMigration(currentEditor)
-    },
-    onUpdate: ({ transaction }) => {
-      handleEditorUpdate(transaction)
-    },
-  })
-
-  if (typeof cursorPos === 'number') {
-    try {
-      editor.commands.focus()
-      editor.commands.setTextSelection(Math.min(cursorPos, editor.state.doc.content.size))
-    } catch {
-      // Ignore cursor restore errors
-    }
-  }
-}
 
 // Initialize editor
 function createEditor(content: any = '') {
   editor = new Editor({
     element: document.getElementById('editor')!,
-    extensions: buildExtensions(codeBlockExtension, mathExtension),
+    extensions: buildExtensions(),
     content,
     autofocus: true,
     editorProps: {
@@ -145,10 +103,18 @@ function createEditor(content: any = '') {
       },
     },
     onCreate: ({ editor: currentEditor }) => {
-      maybeRunMathMigration(currentEditor)
+      // Migrate any existing $...$ patterns to math nodes
+      migrateAllMathStrings(currentEditor)
     },
     onUpdate: ({ transaction }) => {
-      handleEditorUpdate(transaction)
+      // Guard to avoid redundant DOM updates
+      if (!isModified) {
+        setModified(true)
+      }
+      // Only run expensive math migration when this update introduced math syntax.
+      if (shouldRunMathMigrationForTransaction(transaction as any)) {
+        debouncedMigrateMath()
+      }
     },
   })
 
@@ -189,15 +155,48 @@ async function loadCodeHighlighting(): Promise<void> {
     ])
 
     const lowlight = createLowlight(common)
-    codeBlockExtension = CodeBlockLowlight.configure({
-      lowlight,
-      defaultLanguage: 'plaintext',
-    })
 
     // Capture content AFTER imports complete to avoid losing edits during await
     const snapshot = editor.getJSON()
     const { from } = editor.state.selection
-    rebuildEditor(snapshot, from)
+
+    editor.destroy()
+
+    const codeBlockExt = CodeBlockLowlight.configure({
+      lowlight,
+      defaultLanguage: 'plaintext',
+    })
+
+    editor = new Editor({
+      element: document.getElementById('editor')!,
+      extensions: buildExtensions(codeBlockExt),
+      content: snapshot, // Use JSON to preserve structure
+      autofocus: true,
+      editorProps: {
+        attributes: {
+          class: 'tiptap',
+        },
+      },
+      onCreate: ({ editor: currentEditor }) => {
+        migrateAllMathStrings(currentEditor)
+      },
+      onUpdate: ({ transaction }) => {
+        if (!isModified) {
+          setModified(true)
+        }
+        if (shouldRunMathMigrationForTransaction(transaction as any)) {
+          debouncedMigrateMath()
+        }
+      },
+    })
+
+    // Try to restore cursor position
+    try {
+      editor.commands.focus()
+      editor.commands.setTextSelection(Math.min(from, editor.state.doc.content.size))
+    } catch {
+      // Ignore cursor restore errors
+    }
 
     console.log('Code highlighting loaded')
   } catch (e) {
@@ -206,71 +205,10 @@ async function loadCodeHighlighting(): Promise<void> {
   }
 }
 
-function hasPotentialMathSyntax(content: string): boolean {
-  return content.includes('$')
-}
-
-async function loadMathSupport(): Promise<void> {
-  if (mathSupportLoaded) return
-  if (mathLoadPromise) return mathLoadPromise
-
-  mathLoadPromise = (async () => {
-    const [{ Mathematics }] = await Promise.all([
-      import('@tiptap/extension-mathematics'),
-    ])
-
-    mathExtension = Mathematics.configure({
-      inlineOptions: {
-        onClick: (node: any, pos: number) => {
-          const latex = prompt('Edit LaTeX:', node.attrs.latex)
-          if (latex !== null && latex !== '') {
-            editor.chain().setNodeSelection(pos).updateInlineMath({ latex }).focus().run()
-          }
-        },
-      },
-      blockOptions: {
-        onClick: (node: any, pos: number) => {
-          const latex = prompt('Edit LaTeX:', node.attrs.latex)
-          if (latex !== null && latex !== '') {
-            editor.chain().setNodeSelection(pos).updateBlockMath({ latex }).focus().run()
-          }
-        },
-      },
-      katexOptions: {
-        throwOnError: false,
-        macros: katexMacros,
-      },
-    })
-
-    const snapshot = editor.getJSON()
-    const { from } = editor.state.selection
-    mathSupportLoaded = true
-    rebuildEditor(snapshot, from)
-    migrateAllMathStrings(editor)
-    console.log('Math support loaded')
-  })()
-
-  try {
-    await mathLoadPromise
-  } catch (e) {
-    console.error('Failed to load math support:', e)
-    mathSupportLoaded = false
-    mathExtension = null
-  } finally {
-    mathLoadPromise = null
-  }
-}
-
 // Check if content has code blocks and load highlighting if needed
 async function ensureCodeHighlightingForContent(content: string): Promise<void> {
   if (!codeHighlightingLoaded && content.includes('```')) {
     await loadCodeHighlighting()
-  }
-}
-
-async function ensureMathSupportForContent(content: string): Promise<void> {
-  if (!mathSupportLoaded && hasPotentialMathSyntax(content)) {
-    await loadMathSupport()
   }
 }
 
@@ -386,7 +324,6 @@ async function openFile() {
 
       // Load code highlighting if content has code blocks
       await ensureCodeHighlightingForContent(content)
-      await ensureMathSupportForContent(content)
 
       // Set content using markdown API
       setMarkdownContent(content)
@@ -418,7 +355,6 @@ async function openFilePath(filePath: string): Promise<boolean> {
 
     // Load code highlighting if needed
     await ensureCodeHighlightingForContent(content)
-    await ensureMathSupportForContent(content)
 
     // Set content
     setMarkdownContent(content)
