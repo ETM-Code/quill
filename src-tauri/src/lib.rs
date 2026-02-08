@@ -41,6 +41,11 @@ fn register_frontend_ready(
     drain_pending_files(&state)
 }
 
+#[tauri::command]
+fn read_markdown_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("failed to read {path}: {e}"))
+}
+
 fn build_init_script(files: &[PathBuf]) -> String {
     // Convert files to JS array string
     let files_js = files
@@ -146,7 +151,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![register_frontend_ready])
+        .invoke_handler(tauri::generate_handler![
+            register_frontend_ready,
+            read_markdown_file
+        ])
         .setup(|app| {
             // Check command line args for files (works on all platforms)
             let mut files = Vec::new();
@@ -300,5 +308,14 @@ mod tests {
     fn next_window_label_generates_expected_prefix() {
         let label = next_window_label();
         assert!(label.starts_with("doc-"));
+    }
+
+    #[test]
+    fn read_markdown_file_returns_contents() {
+        let path = "/tmp/quill-read-markdown-test.md";
+        std::fs::write(path, "# ok\nbody").expect("write temp file");
+        let content = read_markdown_file(path.to_string()).expect("read file");
+        assert_eq!(content, "# ok\nbody");
+        let _ = std::fs::remove_file(path);
     }
 }

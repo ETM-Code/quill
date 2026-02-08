@@ -350,8 +350,15 @@ async function newFile() {
 // Open a file by path (used by file associations)
 async function openFilePath(filePath: string): Promise<boolean> {
   try {
-    const { readTextFile } = await import('@tauri-apps/plugin-fs')
-    const content = await readTextFile(filePath)
+    let content: string
+    try {
+      const { readTextFile } = await import('@tauri-apps/plugin-fs')
+      content = await readTextFile(filePath)
+    } catch (pluginReadError) {
+      const { invoke } = await import('@tauri-apps/api/core')
+      content = await invoke<string>('read_markdown_file', { path: filePath })
+      console.warn('Fell back to native file read for:', filePath, pluginReadError)
+    }
 
     // Load code highlighting if needed
     await ensureCodeHighlightingForContent(content)
