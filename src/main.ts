@@ -3,7 +3,10 @@ import StarterKit from '@tiptap/starter-kit'
 import { Markdown } from '@tiptap/markdown'
 import Placeholder from '@tiptap/extension-placeholder'
 import Typography from '@tiptap/extension-typography'
-import { Mathematics, migrateMathStrings } from '@tiptap/extension-mathematics'
+import { Mathematics } from '@tiptap/extension-mathematics'
+import { getMarkdownFromEditor, setMarkdownInEditor } from './editor-markdown'
+import { migrateAllMathStrings } from './math-migration'
+import { selectStartupFiles } from './startup-files'
 
 // Load KaTeX CSS immediately
 import 'katex/dist/katex.min.css'
@@ -83,7 +86,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
 // Migrate math strings (debounced to avoid running on every keystroke)
 const debouncedMigrateMath = debounce(() => {
   if (editor) {
-    migrateMathStrings(editor)
+    migrateAllMathStrings(editor)
   }
 }, 300)
 
@@ -101,7 +104,7 @@ function createEditor(content: any = '') {
     },
     onCreate: ({ editor: currentEditor }) => {
       // Migrate any existing $...$ patterns to math nodes
-      migrateMathStrings(currentEditor)
+      migrateAllMathStrings(currentEditor)
     },
     onUpdate: () => {
       // Guard to avoid redundant DOM updates
@@ -173,7 +176,7 @@ async function loadCodeHighlighting(): Promise<void> {
         },
       },
       onCreate: ({ editor: currentEditor }) => {
-        migrateMathStrings(currentEditor)
+        migrateAllMathStrings(currentEditor)
       },
       onUpdate: () => {
         if (!isModified) {
@@ -267,25 +270,12 @@ function setupKeyboardShortcuts() {
 
 // Get markdown content from editor
 function getMarkdownContent(): string {
-  // Use the markdown extension's storage API
-  const storage = editor.storage as any
-  if (storage?.markdown?.getMarkdown) {
-    return storage.markdown.getMarkdown()
-  }
-  // Last resort: HTML (shouldn't happen with Markdown extension)
-  return editor.getHTML()
+  return getMarkdownFromEditor(editor as any)
 }
 
 // Set markdown content in editor
 function setMarkdownContent(markdown: string): void {
-  const storage = editor.storage as any
-  if (storage?.markdown?.setMarkdown) {
-    storage.markdown.setMarkdown(markdown)
-  } else {
-    // Fallback: parse markdown and set as JSON
-    // The Markdown extension should handle this via setContent with proper parsing
-    editor.commands.setContent(markdown)
-  }
+  setMarkdownInEditor(editor as any, markdown)
 }
 
 // File operations (Tauri)
@@ -354,7 +344,7 @@ async function newFile() {
 }
 
 // Open a file by path (used by file associations)
-async function openFilePath(filePath: string) {
+async function openFilePath(filePath: string): Promise<boolean> {
   try {
     const { readTextFile } = await import('@tauri-apps/plugin-fs')
     const content = await readTextFile(filePath)
@@ -368,13 +358,25 @@ async function openFilePath(filePath: string) {
     currentFilePath = filePath
     setFilename(getBasename(filePath))
     setModified(false)
+    return true
   } catch (e) {
     console.error('Failed to open file:', e)
+    return false
+  }
+}
+
+// Declare global for TypeScript
+declare global {
+  interface Window {
+    openedFiles?: string[]
   }
 }
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  console.log('DOMContentLoaded fired')
+  console.log('window.openedFiles =', window.openedFiles)
+
   // Initialize DOM element references
   filenameEl = document.getElementById('filename')!
   modifiedIndicator = document.getElementById('modified-indicator')!
@@ -383,32 +385,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupKeyboardShortcuts()
   setFilename('untitled.md')
 
-  // Check if app was opened with a file (poll a few times for macOS Apple Events timing)
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-
-    const checkForInitialFile = async (): Promise<boolean> => {
-      const initialFile = await invoke<string | null>('get_initial_file')
-      if (initialFile) {
-        await openFilePath(initialFile)
-        return true
-      }
-      return false
-    }
-
-    // Try immediately, then poll a couple more times for macOS timing
-    if (!await checkForInitialFile()) {
-      setTimeout(async () => {
-        if (!await checkForInitialFile()) {
-          setTimeout(checkForInitialFile, 200)
-        }
-      }, 100)
-    }
-  } catch (e) {
-    console.error('Failed to get initial file:', e)
-  }
-
-  // Listen for files opened while app is running (macOS "Open With")
+  // Listen for files opened while app is already running.
+  // This must be ready before we signal backend readiness.
   try {
     const { listen } = await import('@tauri-apps/api/event')
     await listen<string>('open-file', async (event) => {
@@ -421,24 +399,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.error('Failed to set up file listener:', e)
   }
 
-  // Also listen for deep-link events (file associations)
+  let pendingFiles: string[] = []
   try {
-    const { onOpenUrl } = await import('@tauri-apps/plugin-deep-link')
-    await onOpenUrl(async (urls) => {
-      console.log('deep-link onOpenUrl received:', urls)
-      for (const url of urls) {
-        // Handle file:// URLs
-        if (url.startsWith('file://')) {
-          const filePath = decodeURIComponent(url.replace('file://', ''))
-          console.log('Opening file from deep-link:', filePath)
-          if (await confirmDiscardChanges()) {
-            await openFilePath(filePath)
-          }
-          break // Only open first file
-        }
-      }
-    })
+    const { invoke } = await import('@tauri-apps/api/core')
+    pendingFiles = await invoke<string[]>('register_frontend_ready')
+    console.log('Pending files from backend queue:', pendingFiles)
   } catch (e) {
-    console.error('Failed to set up deep-link listener:', e)
+    console.error('Failed to register frontend readiness:', e)
+  }
+
+  const startupFiles = selectStartupFiles(window.openedFiles, pendingFiles)
+
+  if (startupFiles.length > 0) {
+    console.log('Opening startup file:', startupFiles[0])
+    try {
+      if (await openFilePath(startupFiles[0])) {
+        console.log('File opened successfully')
+      }
+    } catch (e) {
+      console.error('Failed to open file:', e)
+    }
+  } else {
+    console.log('No files to open on startup')
   }
 })

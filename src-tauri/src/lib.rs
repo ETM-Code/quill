@@ -1,79 +1,272 @@
+use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::Duration;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
-// Store initial file path (thread-safe for updates from events)
-struct InitialFile(Mutex<Option<String>>);
+#[derive(Default, Debug)]
+struct OpenFileState {
+    frontend_ready: bool,
+    pending_files: Vec<String>,
+}
+
+fn collect_file_paths(files: &[PathBuf]) -> Vec<String> {
+    files
+        .iter()
+        .filter_map(|f| f.to_str().map(std::string::ToString::to_string))
+        .collect()
+}
+
+fn drain_pending_files(state: &Mutex<OpenFileState>) -> Vec<String> {
+    let mut guard = state.lock().expect("open-file state mutex poisoned");
+    guard.frontend_ready = true;
+    std::mem::take(&mut guard.pending_files)
+}
+
+fn dispatch_or_queue_files(
+    state: &Mutex<OpenFileState>,
+    files: Vec<String>,
+) -> Vec<String> {
+    let mut guard = state.lock().expect("open-file state mutex poisoned");
+    if guard.frontend_ready {
+        files
+    } else {
+        guard.pending_files.extend(files);
+        Vec::new()
+    }
+}
+
+fn reset_state_for_new_window(
+    state: &Mutex<OpenFileState>,
+    files: &[PathBuf],
+) {
+    let mut guard = state.lock().expect("open-file state mutex poisoned");
+    guard.frontend_ready = false;
+    guard.pending_files = collect_file_paths(files);
+}
+
+#[tauri::command]
+fn register_frontend_ready(
+    state: tauri::State<'_, Mutex<OpenFileState>>,
+) -> Vec<String> {
+    drain_pending_files(&state)
+}
+
+fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
+    println!("DEBUG: handle_file_associations called with {} files", files.len());
+
+    // Convert files to JS array string
+    let files_js = files
+        .iter()
+        .filter_map(|f| f.to_str())
+        .map(|f| {
+            let escaped = f.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{}\"", escaped)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    println!("DEBUG: Files for JS: [{}]", files_js);
+
+    // Check if window already exists
+    if let Some(window) = app.get_webview_window("main") {
+        // Window exists - emit immediately only if frontend is ready; otherwise queue.
+        let state = app.state::<Mutex<OpenFileState>>();
+        let dispatch_now = dispatch_or_queue_files(&state, collect_file_paths(&files));
+
+        if dispatch_now.is_empty() {
+            println!("DEBUG: Window exists but frontend not ready, queued open-file events");
+        } else {
+            println!("DEBUG: Window exists and frontend ready, emitting open-file event");
+            for path_str in dispatch_now {
+                let _ = window.emit("open-file", path_str);
+            }
+        }
+    } else {
+        // Create window with initialization script that sets window.openedFiles
+        println!("DEBUG: Creating window with initialization script");
+        {
+            let state = app.state::<Mutex<OpenFileState>>();
+            reset_state_for_new_window(&state, &files);
+        }
+
+        let init_script = if files.is_empty() {
+            "window.openedFiles = []; console.log('INIT SCRIPT: No files');".to_string()
+        } else {
+            format!("window.openedFiles = [{}]; console.log('INIT SCRIPT: Files =', window.openedFiles); document.title = 'LOADING: ' + window.openedFiles[0];", files_js)
+        };
+
+        let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            .initialization_script(&init_script)
+            .title("Quill")
+            .inner_size(900.0, 700.0)
+            .min_inner_size(400.0, 300.0)
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .devtools(true)
+            .build()
+            .expect("failed to create window");
+
+        // Open devtools automatically for debugging
+        #[cfg(debug_assertions)]
+        window.open_devtools();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(Mutex::new(OpenFileState::default()))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_deep_link::init())
-        .manage(InitialFile(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![register_frontend_ready])
         .setup(|app| {
-            // Check for file arguments passed on startup (Linux/Windows style)
-            let args: Vec<String> = std::env::args().collect();
-            println!("DEBUG: Command line args = {:?}", args);
-            if args.len() > 1 {
-                let file_path = &args[1];
-                println!("DEBUG: Checking file path from args: {}", file_path);
-                if std::path::Path::new(file_path).exists() {
-                    println!("DEBUG: File exists, storing as initial file");
-                    let state = app.state::<InitialFile>();
-                    *state.0.lock().unwrap() = Some(file_path.clone());
+            // Check command line args for files (works on all platforms)
+            let mut files = Vec::new();
+            for maybe_file in std::env::args().skip(1) {
+                if maybe_file.starts_with('-') {
+                    continue;
+                }
+                let path = PathBuf::from(&maybe_file);
+                if path.exists() {
+                    println!("DEBUG: Found file in args: {:?}", path);
+                    files.push(path);
                 }
             }
+
+            println!("DEBUG: setup - found {} files in args", files.len());
+
+            // On Windows/Linux, create window immediately with files
+            #[cfg(any(windows, target_os = "linux"))]
+            {
+                handle_file_associations(app.handle(), files);
+            }
+
+            // On macOS, if we have files from args, create window with them
+            // Otherwise wait for RunEvent::Opened or Ready
+            #[cfg(target_os = "macos")]
+            {
+                if !files.is_empty() {
+                    println!("DEBUG: macOS - creating window with files from args");
+                    handle_file_associations(app.handle(), files);
+                }
+                // If no files, window will be created in RunEvent::Ready or Opened
+            }
+
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_initial_file])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Handle RunEvent::Opened for macOS file associations
-            if let tauri::RunEvent::Opened { urls } = event {
-                println!("DEBUG: RunEvent::Opened received with {} URLs", urls.len());
-                for url in urls {
-                    println!("DEBUG: URL = {:?}", url);
-                    if let Ok(path) = url.to_file_path() {
-                        if let Some(path_str) = path.to_str() {
-                            let path_string = path_str.to_string();
-                            println!("DEBUG: File path = {}", path_string);
+            match event {
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Opened { urls } => {
+                    println!("DEBUG: RunEvent::Opened with {} URLs", urls.len());
+                    let files = urls
+                        .into_iter()
+                        .filter_map(|url| {
+                            println!("DEBUG: URL = {:?}", url);
+                            url.to_file_path().ok()
+                        })
+                        .collect::<Vec<_>>();
 
-                            // Store for frontend to query (this always works)
-                            let state = app.state::<InitialFile>();
-                            *state.0.lock().unwrap() = Some(path_string.clone());
-
-                            // Also try to emit event with retries (for when app is already running)
-                            let app_handle = app.clone();
-                            let path_for_emit = path_string.clone();
-                            std::thread::spawn(move || {
-                                // Retry a few times with delays to give frontend time to initialize
-                                for i in 0..5 {
-                                    std::thread::sleep(Duration::from_millis(100 * (i + 1)));
-                                    if let Some(window) = app_handle.get_webview_window("main") {
-                                        println!("DEBUG: Attempt {} - Emitting open-file event", i + 1);
-                                        if window.emit("open-file", path_for_emit.clone()).is_ok() {
-                                            println!("DEBUG: Event emitted successfully");
-                                            break;
-                                        }
-                                    }
-                                }
-                            });
-                        }
+                    handle_file_associations(app, files);
+                }
+                tauri::RunEvent::Ready => {
+                    println!("DEBUG: RunEvent::Ready");
+                    // On macOS, if no window exists yet (no files opened), create one
+                    #[cfg(target_os = "macos")]
+                    {
+                        let app_handle = app.clone();
+                        std::thread::spawn(move || {
+                            // Small delay to let Opened event fire first if there is one
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            if app_handle.get_webview_window("main").is_none() {
+                                println!("DEBUG: No window after Ready, creating empty one");
+                                handle_file_associations(&app_handle, vec![]);
+                            }
+                        });
                     }
                 }
+                _ => {}
             }
         });
 }
 
-// Command to get and clear the initial file path
-#[tauri::command]
-fn get_initial_file(state: tauri::State<InitialFile>) -> Option<String> {
-    let mut guard = state.0.lock().unwrap();
-    let result = guard.take();
-    println!("DEBUG: get_initial_file called, returning: {:?}", result);
-    result
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queues_files_when_frontend_not_ready() {
+        let state = Mutex::new(OpenFileState::default());
+        let dispatched = dispatch_or_queue_files(
+            &state,
+            vec!["/tmp/a.md".to_string(), "/tmp/b.md".to_string()],
+        );
+
+        assert!(dispatched.is_empty());
+        let guard = state.lock().expect("state lock");
+        assert_eq!(
+            guard.pending_files,
+            vec!["/tmp/a.md".to_string(), "/tmp/b.md".to_string()]
+        );
+        assert!(!guard.frontend_ready);
+    }
+
+    #[test]
+    fn drains_pending_files_and_marks_frontend_ready() {
+        let state = Mutex::new(OpenFileState {
+            frontend_ready: false,
+            pending_files: vec!["/tmp/queued.md".to_string()],
+        });
+
+        let drained = drain_pending_files(&state);
+        assert_eq!(drained, vec!["/tmp/queued.md".to_string()]);
+
+        let guard = state.lock().expect("state lock");
+        assert!(guard.frontend_ready);
+        assert!(guard.pending_files.is_empty());
+    }
+
+    #[test]
+    fn dispatches_immediately_after_frontend_ready() {
+        let state = Mutex::new(OpenFileState {
+            frontend_ready: true,
+            pending_files: vec!["/tmp/old.md".to_string()],
+        });
+
+        let dispatched = dispatch_or_queue_files(&state, vec!["/tmp/new.md".to_string()]);
+        assert_eq!(dispatched, vec!["/tmp/new.md".to_string()]);
+
+        let guard = state.lock().expect("state lock");
+        assert_eq!(guard.pending_files, vec!["/tmp/old.md".to_string()]);
+        assert!(guard.frontend_ready);
+    }
+
+    #[test]
+    fn collects_only_valid_utf8_file_paths() {
+        let files = vec![PathBuf::from("/tmp/one.md"), PathBuf::from("/tmp/two.md")];
+        assert_eq!(
+            collect_file_paths(&files),
+            vec!["/tmp/one.md".to_string(), "/tmp/two.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn reset_state_for_new_window_marks_not_ready_and_queues_files() {
+        let state = Mutex::new(OpenFileState {
+            frontend_ready: true,
+            pending_files: vec!["/tmp/old.md".to_string()],
+        });
+        let files = vec![PathBuf::from("/tmp/new-a.md"), PathBuf::from("/tmp/new-b.md")];
+
+        reset_state_for_new_window(&state, &files);
+
+        let guard = state.lock().expect("state lock");
+        assert!(!guard.frontend_ready);
+        assert_eq!(
+            guard.pending_files,
+            vec!["/tmp/new-a.md".to_string(), "/tmp/new-b.md".to_string()]
+        );
+    }
 }
