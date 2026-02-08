@@ -92,6 +92,7 @@ fn create_editor_window(
     let _window = WebviewWindowBuilder::new(app, label, window_url)
         .initialization_script(&init_script)
         .title("Quill")
+        .visible(false)
         .inner_size(900.0, 700.0)
         .min_inner_size(400.0, 300.0)
         .title_bar_style(tauri::TitleBarStyle::Overlay)
@@ -103,6 +104,23 @@ fn create_editor_window(
     // Open devtools automatically for debugging
     #[cfg(debug_assertions)]
     _window.open_devtools();
+}
+
+fn ensure_keepalive_window(app: &tauri::AppHandle) {
+    if app.get_webview_window("keepalive").is_some() {
+        return;
+    }
+
+    let _keepalive = WebviewWindowBuilder::new(
+        app,
+        "keepalive",
+        WebviewUrl::App("index.html?keepalive=1".into()),
+    )
+    .visible(false)
+    .skip_taskbar(true)
+    .focused(false)
+    .build()
+    .expect("failed to create keepalive window");
 }
 
 fn next_window_label() -> String {
@@ -181,6 +199,7 @@ pub fn run() {
             // Otherwise wait for RunEvent::Opened or Ready
             #[cfg(target_os = "macos")]
             {
+                ensure_keepalive_window(app.handle());
                 if !files.is_empty() {
                     println!("DEBUG: macOS - creating window with files from args");
                     handle_file_associations(app.handle(), files);
@@ -221,6 +240,30 @@ pub fn run() {
                                 handle_file_associations(&app_handle, vec![]);
                             }
                         });
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen {
+                    has_visible_windows,
+                    ..
+                } => {
+                    if !has_visible_windows && app.get_webview_window("main").is_none() {
+                        println!("DEBUG: Reopen with no visible windows, creating main window");
+                        handle_file_associations(app, vec![]);
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::ExitRequested { code, api, .. } => {
+                    if code.is_none() {
+                        let has_keepalive_window = app.get_webview_window("keepalive").is_some();
+                        let has_editor_windows = app
+                            .webview_windows()
+                            .keys()
+                            .any(|label| label.as_str() != "keepalive");
+                        if has_keepalive_window && !has_editor_windows {
+                            println!("DEBUG: Preventing exit after last editor window closed");
+                            api.prevent_exit();
+                        }
                     }
                 }
                 _ => {}

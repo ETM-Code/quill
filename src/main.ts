@@ -224,6 +224,25 @@ function setFilename(name: string) {
   document.title = `${name} - Quill`
 }
 
+function nowMs(): number {
+  return performance.now()
+}
+
+function logPerf(label: string, startMs: number): void {
+  if (import.meta.env.DEV) {
+    console.log(`[perf] ${label}: ${(nowMs() - startMs).toFixed(1)}ms`)
+  }
+}
+
+async function showCurrentWindow(): Promise<void> {
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    await getCurrentWindow().show()
+  } catch (e) {
+    console.error('Failed to show window:', e)
+  }
+}
+
 // Extract filename from path (cross-platform)
 function getBasename(filePath: string): string {
   // Handle both Unix and Windows paths
@@ -349,7 +368,9 @@ async function newFile() {
 
 // Open a file by path (used by file associations)
 async function openFilePath(filePath: string): Promise<boolean> {
+  const tOpenStart = nowMs()
   try {
+    const tReadStart = nowMs()
     let content: string
     try {
       const { readTextFile } = await import('@tauri-apps/plugin-fs')
@@ -359,19 +380,26 @@ async function openFilePath(filePath: string): Promise<boolean> {
       content = await invoke<string>('read_markdown_file', { path: filePath })
       console.warn('Fell back to native file read for:', filePath, pluginReadError)
     }
+    logPerf(`openFilePath read (${getBasename(filePath)})`, tReadStart)
 
     // Load code highlighting if needed
+    const tCodeStart = nowMs()
     await ensureCodeHighlightingForContent(content)
+    logPerf(`openFilePath code-highlight check (${getBasename(filePath)})`, tCodeStart)
 
     // Set content
+    const tSetContentStart = nowMs()
     setMarkdownContent(content)
+    logPerf(`openFilePath set content (${getBasename(filePath)})`, tSetContentStart)
 
     currentFilePath = filePath
     setFilename(getBasename(filePath))
     setModified(false)
+    logPerf(`openFilePath total (${getBasename(filePath)})`, tOpenStart)
     return true
   } catch (e) {
     console.error('Failed to open file:', e)
+    logPerf(`openFilePath failed (${getBasename(filePath)})`, tOpenStart)
     return false
   }
 }
@@ -385,15 +413,27 @@ declare global {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
+  const tStartupStart = nowMs()
   console.log('DOMContentLoaded fired')
   console.log('window.openedFiles =', window.openedFiles)
-  const startupFileFromUrl = new URL(window.location.href).searchParams.get('open')
+  const parsedUrl = new URL(window.location.href)
+  const startupFileFromUrl = parsedUrl.searchParams.get('open')
+  const isKeepaliveWindow = parsedUrl.searchParams.get('keepalive') === '1'
+
+  if (isKeepaliveWindow) {
+    if (import.meta.env.DEV) {
+      console.log('[perf] keepalive window booted')
+    }
+    return
+  }
 
   // Initialize DOM element references
   filenameEl = document.getElementById('filename')!
   modifiedIndicator = document.getElementById('modified-indicator')!
 
+  const tCreateEditorStart = nowMs()
   createEditor()
+  logPerf('createEditor', tCreateEditorStart)
   setupKeyboardShortcuts()
   setFilename('untitled.md')
 
@@ -414,4 +454,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     console.log('No files to open on startup')
   }
+
+  const tShowWindowStart = nowMs()
+  await showCurrentWindow()
+  logPerf('showCurrentWindow', tShowWindowStart)
+  logPerf('startup total', tStartupStart)
 })
