@@ -389,30 +389,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupKeyboardShortcuts()
   setFilename('untitled.md')
 
-  // Listen for files opened while app is already running.
-  // This must be ready before we signal backend readiness.
-  try {
-    const { listen } = await import('@tauri-apps/api/event')
-    await listen<string>('open-file', async (event) => {
-      console.log('open-file event received:', event.payload)
-      if (await confirmDiscardChanges()) {
-        await openFilePath(event.payload)
-      }
-    })
-  } catch (e) {
-    console.error('Failed to set up file listener:', e)
-  }
-
-  let pendingFiles: string[] = []
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    pendingFiles = await invoke<string[]>('register_frontend_ready')
-    console.log('Pending files from backend queue:', pendingFiles)
-  } catch (e) {
-    console.error('Failed to register frontend readiness:', e)
-  }
-
-  const startupFiles = selectStartupFiles(window.openedFiles, pendingFiles)
+  const startupFiles = selectStartupFiles(window.openedFiles, [])
 
   if (startupFiles.length > 0) {
     console.log('Opening startup file:', startupFiles[0])
