@@ -89,7 +89,7 @@ fn create_editor_window(
 
     let init_script = build_init_script(&files);
     let window_url = build_window_url(&files);
-    let window = WebviewWindowBuilder::new(app, label, window_url)
+    let _window = WebviewWindowBuilder::new(app, label, window_url)
         .initialization_script(&init_script)
         .title("Quill")
         .inner_size(900.0, 700.0)
@@ -102,7 +102,7 @@ fn create_editor_window(
 
     // Open devtools automatically for debugging
     #[cfg(debug_assertions)]
-    window.open_devtools();
+    _window.open_devtools();
 }
 
 fn next_window_label() -> String {
