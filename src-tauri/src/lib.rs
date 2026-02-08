@@ -1,12 +1,15 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Default, Debug)]
 struct OpenFileState {
     frontend_ready: bool,
     pending_files: Vec<String>,
 }
+
+static WINDOW_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 fn collect_file_paths(files: &[PathBuf]) -> Vec<String> {
     files
@@ -19,19 +22,6 @@ fn drain_pending_files(state: &Mutex<OpenFileState>) -> Vec<String> {
     let mut guard = state.lock().expect("open-file state mutex poisoned");
     guard.frontend_ready = true;
     std::mem::take(&mut guard.pending_files)
-}
-
-fn dispatch_or_queue_files(
-    state: &Mutex<OpenFileState>,
-    files: Vec<String>,
-) -> Vec<String> {
-    let mut guard = state.lock().expect("open-file state mutex poisoned");
-    if guard.frontend_ready {
-        files
-    } else {
-        guard.pending_files.extend(files);
-        Vec::new()
-    }
 }
 
 fn reset_state_for_new_window(
@@ -50,9 +40,7 @@ fn register_frontend_ready(
     drain_pending_files(&state)
 }
 
-fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
-    println!("DEBUG: handle_file_associations called with {} files", files.len());
-
+fn build_init_script(files: &[PathBuf]) -> String {
     // Convert files to JS array string
     let files_js = files
         .iter()
@@ -64,50 +52,77 @@ fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
         .collect::<Vec<_>>()
         .join(",");
 
-    println!("DEBUG: Files for JS: [{}]", files_js);
-
-    // Check if window already exists
-    if let Some(window) = app.get_webview_window("main") {
-        // Window exists - emit immediately only if frontend is ready; otherwise queue.
-        let state = app.state::<Mutex<OpenFileState>>();
-        let dispatch_now = dispatch_or_queue_files(&state, collect_file_paths(&files));
-
-        if dispatch_now.is_empty() {
-            println!("DEBUG: Window exists but frontend not ready, queued open-file events");
-        } else {
-            println!("DEBUG: Window exists and frontend ready, emitting open-file event");
-            for path_str in dispatch_now {
-                let _ = window.emit("open-file", path_str);
-            }
-        }
+    if files.is_empty() {
+        "window.openedFiles = []; console.log('INIT SCRIPT: No files');".to_string()
     } else {
-        // Create window with initialization script that sets window.openedFiles
-        println!("DEBUG: Creating window with initialization script");
-        {
-            let state = app.state::<Mutex<OpenFileState>>();
-            reset_state_for_new_window(&state, &files);
+        format!("window.openedFiles = [{}]; console.log('INIT SCRIPT: Files =', window.openedFiles); document.title = 'LOADING: ' + window.openedFiles[0];", files_js)
+    }
+}
+
+fn create_editor_window(
+    app: &tauri::AppHandle,
+    label: &str,
+    files: Vec<PathBuf>,
+    reset_state: bool,
+) {
+    if reset_state {
+        let state = app.state::<Mutex<OpenFileState>>();
+        reset_state_for_new_window(&state, &files);
+    }
+
+    let init_script = build_init_script(&files);
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+        .initialization_script(&init_script)
+        .title("Quill")
+        .inner_size(900.0, 700.0)
+        .min_inner_size(400.0, 300.0)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .devtools(true)
+        .build()
+        .expect("failed to create window");
+
+    // Open devtools automatically for debugging
+    #[cfg(debug_assertions)]
+    window.open_devtools();
+}
+
+fn next_window_label() -> String {
+    let id = WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("doc-{id}")
+}
+
+fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
+    println!("DEBUG: handle_file_associations called with {} files", files.len());
+
+    if files.is_empty() {
+        if app.get_webview_window("main").is_none() {
+            println!("DEBUG: Creating empty main window");
+            create_editor_window(app, "main", vec![], true);
+        }
+        return;
+    }
+
+    if app.get_webview_window("main").is_none() {
+        println!("DEBUG: No main window, creating main window with first file");
+        let mut iter = files.into_iter();
+        if let Some(first) = iter.next() {
+            create_editor_window(app, "main", vec![first], true);
         }
 
-        let init_script = if files.is_empty() {
-            "window.openedFiles = []; console.log('INIT SCRIPT: No files');".to_string()
-        } else {
-            format!("window.openedFiles = [{}]; console.log('INIT SCRIPT: Files =', window.openedFiles); document.title = 'LOADING: ' + window.openedFiles[0];", files_js)
-        };
+        for file in iter {
+            let label = next_window_label();
+            println!("DEBUG: Creating additional window {label} for file");
+            create_editor_window(app, &label, vec![file], false);
+        }
+        return;
+    }
 
-        let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-            .initialization_script(&init_script)
-            .title("Quill")
-            .inner_size(900.0, 700.0)
-            .min_inner_size(400.0, 300.0)
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .hidden_title(true)
-            .devtools(true)
-            .build()
-            .expect("failed to create window");
-
-        // Open devtools automatically for debugging
-        #[cfg(debug_assertions)]
-        window.open_devtools();
+    // Main window already exists: open each external file in a new window
+    for file in files {
+        let label = next_window_label();
+        println!("DEBUG: Main exists, opening file in new window {label}");
+        create_editor_window(app, &label, vec![file], false);
     }
 }
 
@@ -199,12 +214,10 @@ mod tests {
     #[test]
     fn queues_files_when_frontend_not_ready() {
         let state = Mutex::new(OpenFileState::default());
-        let dispatched = dispatch_or_queue_files(
+        reset_state_for_new_window(
             &state,
-            vec!["/tmp/a.md".to_string(), "/tmp/b.md".to_string()],
+            &vec![PathBuf::from("/tmp/a.md"), PathBuf::from("/tmp/b.md")],
         );
-
-        assert!(dispatched.is_empty());
         let guard = state.lock().expect("state lock");
         assert_eq!(
             guard.pending_files,
@@ -235,11 +248,11 @@ mod tests {
             pending_files: vec!["/tmp/old.md".to_string()],
         });
 
-        let dispatched = dispatch_or_queue_files(&state, vec!["/tmp/new.md".to_string()]);
-        assert_eq!(dispatched, vec!["/tmp/new.md".to_string()]);
+        let drained = drain_pending_files(&state);
+        assert_eq!(drained, vec!["/tmp/old.md".to_string()]);
 
         let guard = state.lock().expect("state lock");
-        assert_eq!(guard.pending_files, vec!["/tmp/old.md".to_string()]);
+        assert!(guard.pending_files.is_empty());
         assert!(guard.frontend_ready);
     }
 
@@ -268,5 +281,11 @@ mod tests {
             guard.pending_files,
             vec!["/tmp/new-a.md".to_string(), "/tmp/new-b.md".to_string()]
         );
+    }
+
+    #[test]
+    fn next_window_label_generates_expected_prefix() {
+        let label = next_window_label();
+        assert!(label.starts_with("doc-"));
     }
 }
