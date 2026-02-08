@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use url::form_urlencoded;
 
 #[derive(Default, Debug)]
 struct OpenFileState {
@@ -59,6 +60,17 @@ fn build_init_script(files: &[PathBuf]) -> String {
     }
 }
 
+fn build_window_url(files: &[PathBuf]) -> WebviewUrl {
+    if let Some(path) = files.first().and_then(|f| f.to_str()) {
+        let query = form_urlencoded::Serializer::new(String::new())
+            .append_pair("open", path)
+            .finish();
+        return WebviewUrl::App(format!("index.html?{query}").into());
+    }
+
+    WebviewUrl::App("index.html".into())
+}
+
 fn create_editor_window(
     app: &tauri::AppHandle,
     label: &str,
@@ -71,7 +83,8 @@ fn create_editor_window(
     }
 
     let init_script = build_init_script(&files);
-    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+    let window_url = build_window_url(&files);
+    let window = WebviewWindowBuilder::new(app, label, window_url)
         .initialization_script(&init_script)
         .title("Quill")
         .inner_size(900.0, 700.0)

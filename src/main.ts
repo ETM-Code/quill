@@ -380,6 +380,7 @@ declare global {
 document.addEventListener('DOMContentLoaded', async () => {
   console.log('DOMContentLoaded fired')
   console.log('window.openedFiles =', window.openedFiles)
+  const startupFileFromUrl = new URL(window.location.href).searchParams.get('open')
 
   // Initialize DOM element references
   filenameEl = document.getElementById('filename')!
@@ -389,7 +390,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupKeyboardShortcuts()
   setFilename('untitled.md')
 
-  const startupFiles = selectStartupFiles(window.openedFiles, [])
+  const startupFiles = selectStartupFiles(
+    window.openedFiles,
+    startupFileFromUrl ? [startupFileFromUrl] : [],
+  )
 
   if (startupFiles.length > 0) {
     console.log('Opening startup file:', startupFiles[0])
