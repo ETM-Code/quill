@@ -5,7 +5,6 @@ import Placeholder from '@tiptap/extension-placeholder'
 import Typography from '@tiptap/extension-typography'
 import { Mathematics } from '@tiptap/extension-mathematics'
 import { getMarkdownFromEditor, setMarkdownInEditor } from './editor-markdown'
-import { migrateAllMathStrings, shouldRunMathMigrationForTransaction } from './math-migration'
 import { openFirstWorkingStartupFile, selectStartupFiles } from './startup-files'
 
 // Load KaTeX CSS immediately
@@ -22,6 +21,7 @@ let dialogApiPromise: Promise<typeof import('@tauri-apps/plugin-dialog')> | null
 let fsApiPromise: Promise<typeof import('@tauri-apps/plugin-fs')> | null = null
 let coreApiPromise: Promise<typeof import('@tauri-apps/api/core')> | null = null
 let windowApiPromise: Promise<typeof import('@tauri-apps/api/window')> | null = null
+let mathMigrationModulePromise: Promise<typeof import('./math-migration')> | null = null
 
 // DOM Elements
 let filenameEl: HTMLElement
@@ -80,7 +80,7 @@ function buildExtensions(codeBlockLowlight?: any) {
 }
 
 // Debounce utility
-function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
+function debounce<T extends (...args: any[]) => unknown>(fn: T, ms: number): T {
   let timeoutId: ReturnType<typeof setTimeout>
   return ((...args: any[]) => {
     clearTimeout(timeoutId)
@@ -88,10 +88,56 @@ function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   }) as T
 }
 
+function containsDollarSign(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return value.includes('$')
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(containsDollarSign)
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.values(value).some(containsDollarSign)
+  }
+
+  return false
+}
+
+function shouldRunMathMigrationForTransaction(transaction: any): boolean {
+  if (!transaction?.docChanged) {
+    return false
+  }
+
+  const steps = transaction.steps ?? []
+  if (steps.length === 0) {
+    return false
+  }
+
+  return steps.some((step: any) => {
+    if (!step || typeof step.toJSON !== 'function') {
+      return false
+    }
+    return containsDollarSign(step.toJSON())
+  })
+}
+
+function getMathMigrationModule() {
+  if (!mathMigrationModulePromise) {
+    mathMigrationModulePromise = import('./math-migration')
+  }
+  return mathMigrationModulePromise
+}
+
+async function migrateAllMathInEditor(targetEditor: Editor): Promise<void> {
+  const { migrateAllMathStrings } = await getMathMigrationModule()
+  migrateAllMathStrings(targetEditor)
+}
+
 // Migrate math strings (debounced to avoid running on every keystroke)
 const debouncedMigrateMath = debounce(() => {
   if (editor) {
-    migrateAllMathStrings(editor)
+    void migrateAllMathInEditor(editor)
   }
 }, 300)
 
@@ -110,7 +156,7 @@ function createEditor(content: any = '') {
     onCreate: ({ editor: currentEditor }) => {
       // Avoid math migration work for empty/non-math startup docs.
       if (currentEditor.getText().includes('$')) {
-        migrateAllMathStrings(currentEditor)
+        void migrateAllMathInEditor(currentEditor)
       }
     },
     onUpdate: ({ transaction }) => {
@@ -189,7 +235,7 @@ async function loadCodeHighlighting(): Promise<void> {
       },
       onCreate: ({ editor: currentEditor }) => {
         if (currentEditor.getText().includes('$')) {
-          migrateAllMathStrings(currentEditor)
+          void migrateAllMathInEditor(currentEditor)
         }
       },
       onUpdate: ({ transaction }) => {
@@ -355,7 +401,7 @@ function applyExternalMarkdownContent(markdown: string): void {
   try {
     setMarkdownContent(markdown)
     if (markdown.includes('$')) {
-      migrateAllMathStrings(editor)
+      void migrateAllMathInEditor(editor)
     }
   } finally {
     suppressEditorUpdateSideEffects = false
