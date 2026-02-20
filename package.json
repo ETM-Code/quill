@@ -12,7 +12,8 @@
     "test:smoke:open": "node scripts/smoke-open-file.mjs",
     "test:size": "bun run build && node scripts/check-size-budget.mjs",
     "test:perf:startup": "bun run build && node scripts/check-startup-perf.mjs",
-    "test:validate": "bun test && bun run test:smoke:open && bun run test:size && bun run test:perf:startup"
+    "test:perf:paint": "bun run build && node scripts/check-paint-perf.mjs",
+    "test:validate": "bun test && bun run test:smoke:open && bun run test:size && bun run test:perf:startup && bun run test:perf:paint"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
