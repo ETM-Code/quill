@@ -7,9 +7,6 @@ import { Mathematics } from '@tiptap/extension-mathematics'
 import { getMarkdownFromEditor, setMarkdownInEditor } from './editor-markdown'
 import { openFirstWorkingStartupFile, selectStartupFiles } from './startup-files'
 
-// Load KaTeX CSS immediately
-import 'katex/dist/katex.min.css'
-
 // State
 let editor: Editor
 let isModified = false
@@ -22,6 +19,7 @@ let fsApiPromise: Promise<typeof import('@tauri-apps/plugin-fs')> | null = null
 let coreApiPromise: Promise<typeof import('@tauri-apps/api/core')> | null = null
 let windowApiPromise: Promise<typeof import('@tauri-apps/api/window')> | null = null
 let mathMigrationModulePromise: Promise<typeof import('./math-migration')> | null = null
+let katexCssPromise: Promise<unknown> | null = null
 
 // DOM Elements
 let filenameEl: HTMLElement
@@ -70,6 +68,7 @@ function buildExtensions(codeBlockLowlight?: any) {
       },
     }),
     CodeBlockTrigger,
+    KatexCssTrigger,
   ]
 
   if (codeBlockLowlight) {
@@ -129,6 +128,13 @@ function getMathMigrationModule() {
   return mathMigrationModulePromise
 }
 
+function loadKatexCss(): Promise<unknown> {
+  if (!katexCssPromise) {
+    katexCssPromise = import('katex/dist/katex.min.css')
+  }
+  return katexCssPromise
+}
+
 async function migrateAllMathInEditor(targetEditor: Editor): Promise<void> {
   const { migrateAllMathStrings } = await getMathMigrationModule()
   migrateAllMathStrings(targetEditor)
@@ -156,6 +162,7 @@ function createEditor(content: any = '') {
     onCreate: ({ editor: currentEditor }) => {
       // Avoid math migration work for empty/non-math startup docs.
       if (currentEditor.getText().includes('$')) {
+        void loadKatexCss()
         void migrateAllMathInEditor(currentEditor)
       }
     },
@@ -192,6 +199,19 @@ const CodeBlockTrigger = Extension.create({
         if (textBefore === '``' && !codeHighlightingLoaded) {
           loadCodeHighlighting()
         }
+        return false
+      },
+    }
+  },
+})
+
+const KatexCssTrigger = Extension.create({
+  name: 'katexCssTrigger',
+
+  addKeyboardShortcuts() {
+    return {
+      '$': () => {
+        void loadKatexCss()
         return false
       },
     }
@@ -235,6 +255,7 @@ async function loadCodeHighlighting(): Promise<void> {
       },
       onCreate: ({ editor: currentEditor }) => {
         if (currentEditor.getText().includes('$')) {
+          void loadKatexCss()
           void migrateAllMathInEditor(currentEditor)
         }
       },
@@ -270,6 +291,12 @@ async function loadCodeHighlighting(): Promise<void> {
 async function ensureCodeHighlightingForContent(content: string): Promise<void> {
   if (!codeHighlightingLoaded && content.includes('```')) {
     await loadCodeHighlighting()
+  }
+}
+
+async function ensureKatexCssForContent(content: string): Promise<void> {
+  if (content.includes('$')) {
+    await loadKatexCss()
   }
 }
 
@@ -406,6 +433,7 @@ function applyExternalMarkdownContent(markdown: string): void {
   try {
     setMarkdownContent(markdown)
     if (markdown.includes('$')) {
+      void loadKatexCss()
       void migrateAllMathInEditor(editor)
     }
   } finally {
@@ -498,6 +526,10 @@ async function openFilePath(filePath: string): Promise<boolean> {
     const tCodeStart = nowMs()
     await ensureCodeHighlightingForContent(content)
     logPerf(`openFilePath code-highlight check (${getBasename(filePath)})`, tCodeStart)
+
+    const tKatexStart = nowMs()
+    await ensureKatexCssForContent(content)
+    logPerf(`openFilePath katex-css check (${getBasename(filePath)})`, tKatexStart)
 
     // Set content
     const tSetContentStart = nowMs()
