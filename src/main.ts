@@ -17,6 +17,7 @@ let isModified = false
 let currentFilename = 'untitled.md'
 let currentFilePath: string | null = null
 let codeHighlightingLoaded = false
+let suppressEditorUpdateSideEffects = false
 let dialogApiPromise: Promise<typeof import('@tauri-apps/plugin-dialog')> | null = null
 let fsApiPromise: Promise<typeof import('@tauri-apps/plugin-fs')> | null = null
 let coreApiPromise: Promise<typeof import('@tauri-apps/api/core')> | null = null
@@ -107,10 +108,15 @@ function createEditor(content: any = '') {
       },
     },
     onCreate: ({ editor: currentEditor }) => {
-      // Migrate any existing $...$ patterns to math nodes
-      migrateAllMathStrings(currentEditor)
+      // Avoid math migration work for empty/non-math startup docs.
+      if (currentEditor.getText().includes('$')) {
+        migrateAllMathStrings(currentEditor)
+      }
     },
     onUpdate: ({ transaction }) => {
+      if (suppressEditorUpdateSideEffects) {
+        return
+      }
       // Guard to avoid redundant DOM updates
       if (!isModified) {
         setModified(true)
@@ -182,9 +188,14 @@ async function loadCodeHighlighting(): Promise<void> {
         },
       },
       onCreate: ({ editor: currentEditor }) => {
-        migrateAllMathStrings(currentEditor)
+        if (currentEditor.getText().includes('$')) {
+          migrateAllMathStrings(currentEditor)
+        }
       },
       onUpdate: ({ transaction }) => {
+        if (suppressEditorUpdateSideEffects) {
+          return
+        }
         if (!isModified) {
           setModified(true)
         }
@@ -333,6 +344,18 @@ function setMarkdownContent(markdown: string): void {
   setMarkdownInEditor(editor as any, markdown)
 }
 
+function applyExternalMarkdownContent(markdown: string): void {
+  suppressEditorUpdateSideEffects = true
+  try {
+    setMarkdownContent(markdown)
+    if (markdown.includes('$')) {
+      migrateAllMathStrings(editor)
+    }
+  } finally {
+    suppressEditorUpdateSideEffects = false
+  }
+}
+
 // File operations (Tauri)
 async function saveFile() {
   try {
@@ -395,7 +418,7 @@ async function openFilePath(filePath: string): Promise<boolean> {
     const testContent = window.__QUILL_TEST_FILE_CONTENTS__?.[filePath]
     if (typeof testContent === 'string') {
       await ensureCodeHighlightingForContent(testContent)
-      setMarkdownContent(testContent)
+      applyExternalMarkdownContent(testContent)
       currentFilePath = filePath
       setFilename(getBasename(filePath))
       setModified(false)
@@ -421,7 +444,7 @@ async function openFilePath(filePath: string): Promise<boolean> {
 
     // Set content
     const tSetContentStart = nowMs()
-    setMarkdownContent(content)
+    applyExternalMarkdownContent(content)
     logPerf(`openFilePath set content (${getBasename(filePath)})`, tSetContentStart)
 
     currentFilePath = filePath
