@@ -25,3 +25,8 @@ dist-ssr
 
 # Test/benchmark files
 tmp-test-files/
+
+# Generated optional icon outputs (not needed for current desktop targets)
+src-tauri/icons/android/
+src-tauri/icons/ios/
+src-tauri/icons/64x64.png
