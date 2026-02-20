@@ -6,7 +6,6 @@
   "permissions": [
     "core:default",
     "core:window:allow-show",
-    "opener:default",
     "dialog:default",
     "fs:default",
     "fs:allow-read-text-file",

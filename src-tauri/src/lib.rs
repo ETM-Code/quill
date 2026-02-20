@@ -4,6 +4,13 @@ use std::sync::Mutex;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use url::form_urlencoded;
 
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        println!($($arg)*);
+    };
+}
+
 #[derive(Default, Debug)]
 struct OpenFileState {
     frontend_ready: bool,
@@ -59,9 +66,12 @@ fn build_init_script(files: &[PathBuf]) -> String {
         .join(",");
 
     if files.is_empty() {
-        "window.openedFiles = []; console.log('INIT SCRIPT: No files');".to_string()
+        "window.openedFiles = [];".to_string()
     } else {
-        format!("window.openedFiles = [{}]; console.log('INIT SCRIPT: Files =', window.openedFiles); document.title = 'LOADING: ' + window.openedFiles[0];", files_js)
+        format!(
+            "window.openedFiles = [{}]; document.title = 'LOADING: ' + window.openedFiles[0];",
+            files_js
+        )
     }
 }
 
@@ -97,7 +107,7 @@ fn create_editor_window(
         .min_inner_size(400.0, 300.0)
         .title_bar_style(tauri::TitleBarStyle::Overlay)
         .hidden_title(true)
-        .devtools(true)
+        .devtools(cfg!(debug_assertions))
         .build()
         .expect("failed to create window");
 
@@ -143,18 +153,18 @@ fn next_window_label() -> String {
 }
 
 fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
-    println!("DEBUG: handle_file_associations called with {} files", files.len());
+    debug_log!("DEBUG: handle_file_associations called with {} files", files.len());
 
     if files.is_empty() {
         if app.get_webview_window("main").is_none() {
-            println!("DEBUG: Creating empty main window");
+            debug_log!("DEBUG: Creating empty main window");
             create_editor_window(app, "main", vec![], true);
         }
         return;
     }
 
     if app.get_webview_window("main").is_none() {
-        println!("DEBUG: No main window, creating main window with first file");
+        debug_log!("DEBUG: No main window, creating main window with first file");
         let mut iter = files.into_iter();
         if let Some(first) = iter.next() {
             create_editor_window(app, "main", vec![first], true);
@@ -162,7 +172,7 @@ fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
 
         for file in iter {
             let label = next_window_label();
-            println!("DEBUG: Creating additional window {label} for file");
+            debug_log!("DEBUG: Creating additional window {label} for file");
             create_editor_window(app, &label, vec![file], false);
         }
         return;
@@ -171,7 +181,7 @@ fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
     // Main window already exists: open each external file in a new window
     for file in files {
         let label = next_window_label();
-        println!("DEBUG: Main exists, opening file in new window {label}");
+        debug_log!("DEBUG: Main exists, opening file in new window {label}");
         create_editor_window(app, &label, vec![file], false);
     }
 }
@@ -180,7 +190,6 @@ fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Mutex::new(OpenFileState::default()))
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
@@ -196,12 +205,12 @@ pub fn run() {
                 }
                 let path = PathBuf::from(&maybe_file);
                 if path.exists() {
-                    println!("DEBUG: Found file in args: {:?}", path);
+                    debug_log!("DEBUG: Found file in args: {:?}", path);
                     files.push(path);
                 }
             }
 
-            println!("DEBUG: setup - found {} files in args", files.len());
+            debug_log!("DEBUG: setup - found {} files in args", files.len());
 
             // On Windows/Linux, create window immediately with files
             #[cfg(any(windows, target_os = "linux"))]
@@ -215,7 +224,7 @@ pub fn run() {
             {
                 ensure_keepalive_window(app.handle());
                 if !files.is_empty() {
-                    println!("DEBUG: macOS - creating window with files from args");
+                    debug_log!("DEBUG: macOS - creating window with files from args");
                     handle_file_associations(app.handle(), files);
                 }
                 // If no files, window will be created in RunEvent::Ready or Opened
@@ -229,11 +238,11 @@ pub fn run() {
             match event {
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Opened { urls } => {
-                    println!("DEBUG: RunEvent::Opened with {} URLs", urls.len());
+                    debug_log!("DEBUG: RunEvent::Opened with {} URLs", urls.len());
                     let files = urls
                         .into_iter()
                         .filter_map(|url| {
-                            println!("DEBUG: URL = {:?}", url);
+                            debug_log!("DEBUG: URL = {:?}", url);
                             url.to_file_path().ok()
                         })
                         .collect::<Vec<_>>();
@@ -241,7 +250,7 @@ pub fn run() {
                     handle_file_associations(app, files);
                 }
                 tauri::RunEvent::Ready => {
-                    println!("DEBUG: RunEvent::Ready");
+                    debug_log!("DEBUG: RunEvent::Ready");
                     // On macOS, if no window exists yet (no files opened), create one
                     #[cfg(target_os = "macos")]
                     {
@@ -250,7 +259,7 @@ pub fn run() {
                             // Small delay to let Opened event fire first if there is one
                             std::thread::sleep(std::time::Duration::from_millis(100));
                             if app_handle.get_webview_window("main").is_none() {
-                                println!("DEBUG: No window after Ready, creating empty one");
+                                debug_log!("DEBUG: No window after Ready, creating empty one");
                                 handle_file_associations(&app_handle, vec![]);
                             }
                         });
@@ -262,7 +271,7 @@ pub fn run() {
                     ..
                 } => {
                     if !has_visible_windows && app.get_webview_window("main").is_none() {
-                        println!("DEBUG: Reopen with no visible windows, creating main window");
+                        debug_log!("DEBUG: Reopen with no visible windows, creating main window");
                         handle_file_associations(app, vec![]);
                     }
                 }
@@ -275,7 +284,7 @@ pub fn run() {
                             .keys()
                             .any(|label| label.as_str() != "keepalive");
                         if has_keepalive_window && !has_editor_windows {
-                            println!("DEBUG: Preventing exit after last editor window closed");
+                            debug_log!("DEBUG: Preventing exit after last editor window closed");
                             api.prevent_exit();
                         }
                     }

@@ -249,6 +249,12 @@ function logPerf(label: string, startMs: number): void {
   }
 }
 
+function debugLog(...args: any[]): void {
+  if (import.meta.env.DEV) {
+    console.log(...args)
+  }
+}
+
 function getDialogApi() {
   if (!dialogApiPromise) {
     dialogApiPromise = import('@tauri-apps/plugin-dialog')
@@ -472,8 +478,8 @@ declare global {
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   const tStartupStart = nowMs()
-  console.log('DOMContentLoaded fired')
-  console.log('window.openedFiles =', window.openedFiles)
+  debugLog('DOMContentLoaded fired')
+  debugLog('window.openedFiles =', window.openedFiles)
   const parsedUrl = new URL(window.location.href)
   const startupFileFromUrl = parsedUrl.searchParams.get('open')
   const isKeepaliveWindow = parsedUrl.searchParams.get('keepalive') === '1'
@@ -505,10 +511,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       const openedFile = await openFirstWorkingStartupFile(
         startupFiles,
         openFilePath,
-        (filePath) => console.log('Opening startup file:', filePath),
+        (filePath) => debugLog('Opening startup file:', filePath),
       )
       if (openedFile) {
-        console.log('Startup file opened successfully:', openedFile)
+        debugLog('Startup file opened successfully:', openedFile)
       } else {
         console.warn('No startup files could be opened')
       }
@@ -516,7 +522,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.error('Failed while processing startup files:', e)
     }
   } else {
-    console.log('No files to open on startup')
+    debugLog('No files to open on startup')
   }
 
   const tShowWindowStart = nowMs()
