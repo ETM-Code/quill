@@ -8,11 +8,13 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:smoke:open": "node scripts/smoke-open-file.mjs"
+    "test:smoke:open": "node scripts/smoke-open-file.mjs",
+    "test:size": "bun run build && node scripts/check-size-budget.mjs",
+    "test:perf:startup": "bun run build && node scripts/check-startup-perf.mjs",
+    "test:validate": "bun test && bun run test:smoke:open && bun run test:size && bun run test:perf:startup"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-deep-link": "^2.4.6",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
     "@tauri-apps/plugin-opener": "^2",

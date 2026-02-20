@@ -112,6 +112,9 @@ bun run tauri build # Production build
 
 ```bash
 bun test           # Frontend unit tests
+bun run test:smoke:open  # Startup file-open smoke test
+bun run test:size  # Build + JS/CSS size budget check
+bun run test:perf:startup # Build + startup performance budget check
 cd src-tauri && cargo test  # Backend tests
 ```
 

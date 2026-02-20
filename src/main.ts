@@ -441,6 +441,8 @@ declare global {
   interface Window {
     openedFiles?: string[]
     __QUILL_TEST_FILE_CONTENTS__?: Record<string, string>
+    __QUILL_STARTUP_DONE__?: boolean
+    __QUILL_STARTUP_DONE_MS__?: number
   }
 }
 
@@ -498,4 +500,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   await showCurrentWindow()
   logPerf('showCurrentWindow', tShowWindowStart)
   logPerf('startup total', tStartupStart)
+  window.__QUILL_STARTUP_DONE__ = true
+  window.__QUILL_STARTUP_DONE_MS__ = nowMs() - tStartupStart
 })
