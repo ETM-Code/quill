@@ -330,6 +330,11 @@ function getWindowApi() {
 }
 
 async function showCurrentWindow(): Promise<void> {
+  // Browser/non-Tauri contexts should skip window API loading entirely.
+  if (!(window as any).__TAURI_INTERNALS__) {
+    return
+  }
+
   try {
     const { getCurrentWindow } = await getWindowApi()
     await getCurrentWindow().show()
@@ -571,9 +576,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     debugLog('No files to open on startup')
   }
 
-  const tShowWindowStart = nowMs()
-  await showCurrentWindow()
-  logPerf('showCurrentWindow', tShowWindowStart)
+  void showCurrentWindow()
   logPerf('startup total', tStartupStart)
   window.__QUILL_STARTUP_DONE__ = true
   window.__QUILL_STARTUP_DONE_MS__ = nowMs() - tStartupStart

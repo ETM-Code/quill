@@ -102,7 +102,7 @@ fn create_editor_window(
     let _window = WebviewWindowBuilder::new(app, label, window_url)
         .initialization_script(&init_script)
         .title("Quill")
-        .visible(false)
+        .visible(true)
         .inner_size(900.0, 700.0)
         .min_inner_size(400.0, 300.0)
         .title_bar_style(tauri::TitleBarStyle::Overlay)
@@ -114,20 +114,6 @@ fn create_editor_window(
     // Open devtools automatically for debugging
     #[cfg(debug_assertions)]
     _window.open_devtools();
-
-    // Safety net: if frontend-driven show() is blocked/fails, force-show editor windows.
-    if label != "keepalive" {
-        let app_handle = app.clone();
-        let label = label.to_string();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            if let Some(window) = app_handle.get_webview_window(&label) {
-                if let Ok(false) = window.is_visible() {
-                    let _ = window.show();
-                }
-            }
-        });
-    }
 }
 
 fn ensure_keepalive_window(app: &tauri::AppHandle) {
