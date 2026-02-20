@@ -391,6 +391,17 @@ async function newFile() {
 async function openFilePath(filePath: string): Promise<boolean> {
   const tOpenStart = nowMs()
   try {
+    // Test hook for browser smoke tests (non-Tauri runtime).
+    const testContent = window.__QUILL_TEST_FILE_CONTENTS__?.[filePath]
+    if (typeof testContent === 'string') {
+      await ensureCodeHighlightingForContent(testContent)
+      setMarkdownContent(testContent)
+      currentFilePath = filePath
+      setFilename(getBasename(filePath))
+      setModified(false)
+      return true
+    }
+
     const tReadStart = nowMs()
     let content: string
     try {
@@ -429,6 +440,7 @@ async function openFilePath(filePath: string): Promise<boolean> {
 declare global {
   interface Window {
     openedFiles?: string[]
+    __QUILL_TEST_FILE_CONTENTS__?: Record<string, string>
   }
 }
 
