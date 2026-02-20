@@ -6,7 +6,7 @@ import Typography from '@tiptap/extension-typography'
 import { Mathematics } from '@tiptap/extension-mathematics'
 import { getMarkdownFromEditor, setMarkdownInEditor } from './editor-markdown'
 import { migrateAllMathStrings, shouldRunMathMigrationForTransaction } from './math-migration'
-import { selectStartupFiles } from './startup-files'
+import { openFirstWorkingStartupFile, selectStartupFiles } from './startup-files'
 
 // Load KaTeX CSS immediately
 import 'katex/dist/katex.min.css'
@@ -17,6 +17,10 @@ let isModified = false
 let currentFilename = 'untitled.md'
 let currentFilePath: string | null = null
 let codeHighlightingLoaded = false
+let dialogApiPromise: Promise<typeof import('@tauri-apps/plugin-dialog')> | null = null
+let fsApiPromise: Promise<typeof import('@tauri-apps/plugin-fs')> | null = null
+let coreApiPromise: Promise<typeof import('@tauri-apps/api/core')> | null = null
+let windowApiPromise: Promise<typeof import('@tauri-apps/api/window')> | null = null
 
 // DOM Elements
 let filenameEl: HTMLElement
@@ -234,9 +238,37 @@ function logPerf(label: string, startMs: number): void {
   }
 }
 
+function getDialogApi() {
+  if (!dialogApiPromise) {
+    dialogApiPromise = import('@tauri-apps/plugin-dialog')
+  }
+  return dialogApiPromise
+}
+
+function getFsApi() {
+  if (!fsApiPromise) {
+    fsApiPromise = import('@tauri-apps/plugin-fs')
+  }
+  return fsApiPromise
+}
+
+function getCoreApi() {
+  if (!coreApiPromise) {
+    coreApiPromise = import('@tauri-apps/api/core')
+  }
+  return coreApiPromise
+}
+
+function getWindowApi() {
+  if (!windowApiPromise) {
+    windowApiPromise = import('@tauri-apps/api/window')
+  }
+  return windowApiPromise
+}
+
 async function showCurrentWindow(): Promise<void> {
   try {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    const { getCurrentWindow } = await getWindowApi()
     await getCurrentWindow().show()
   } catch (e) {
     console.error('Failed to show window:', e)
@@ -255,7 +287,7 @@ async function confirmDiscardChanges(): Promise<boolean> {
   if (!isModified) return true
 
   try {
-    const { ask } = await import('@tauri-apps/plugin-dialog')
+    const { ask } = await getDialogApi()
     return await ask('You have unsaved changes. Discard them?', {
       title: 'Unsaved Changes',
       kind: 'warning',
@@ -304,8 +336,8 @@ function setMarkdownContent(markdown: string): void {
 // File operations (Tauri)
 async function saveFile() {
   try {
-    const { save } = await import('@tauri-apps/plugin-dialog')
-    const { writeTextFile } = await import('@tauri-apps/plugin-fs')
+    const { save } = await getDialogApi()
+    const { writeTextFile } = await getFsApi()
 
     const markdown = getMarkdownContent()
 
@@ -331,25 +363,14 @@ async function openFile() {
   if (!await confirmDiscardChanges()) return
 
   try {
-    const { open } = await import('@tauri-apps/plugin-dialog')
-    const { readTextFile } = await import('@tauri-apps/plugin-fs')
+    const { open } = await getDialogApi()
 
     const filePath = await open({
       filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }],
     })
 
     if (filePath && typeof filePath === 'string') {
-      const content = await readTextFile(filePath)
-
-      // Load code highlighting if content has code blocks
-      await ensureCodeHighlightingForContent(content)
-
-      // Set content using markdown API
-      setMarkdownContent(content)
-
-      currentFilePath = filePath
-      setFilename(getBasename(filePath))
-      setModified(false)
+      await openFilePath(filePath)
     }
   } catch (e) {
     console.error('Open failed:', e)
@@ -373,10 +394,10 @@ async function openFilePath(filePath: string): Promise<boolean> {
     const tReadStart = nowMs()
     let content: string
     try {
-      const { readTextFile } = await import('@tauri-apps/plugin-fs')
+      const { readTextFile } = await getFsApi()
       content = await readTextFile(filePath)
     } catch (pluginReadError) {
-      const { invoke } = await import('@tauri-apps/api/core')
+      const { invoke } = await getCoreApi()
       content = await invoke<string>('read_markdown_file', { path: filePath })
       console.warn('Fell back to native file read for:', filePath, pluginReadError)
     }
@@ -443,13 +464,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   )
 
   if (startupFiles.length > 0) {
-    console.log('Opening startup file:', startupFiles[0])
     try {
-      if (await openFilePath(startupFiles[0])) {
-        console.log('File opened successfully')
+      const openedFile = await openFirstWorkingStartupFile(
+        startupFiles,
+        openFilePath,
+        (filePath) => console.log('Opening startup file:', filePath),
+      )
+      if (openedFile) {
+        console.log('Startup file opened successfully:', openedFile)
+      } else {
+        console.warn('No startup files could be opened')
       }
     } catch (e) {
-      console.error('Failed to open file:', e)
+      console.error('Failed while processing startup files:', e)
     }
   } else {
     console.log('No files to open on startup')
