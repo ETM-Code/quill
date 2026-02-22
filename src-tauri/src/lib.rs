@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use url::form_urlencoded;
 
 macro_rules! debug_log {
@@ -17,7 +18,23 @@ struct OpenFileState {
     pending_files: Vec<String>,
 }
 
+#[derive(Default, Debug)]
+struct RecentFilesState {
+    files: Vec<String>,
+}
+
 static WINDOW_COUNTER: AtomicUsize = AtomicUsize::new(1);
+const MAX_RECENT_FILES: usize = 10;
+const RECENT_FILE_STORAGE_NAME: &str = "recent-files.json";
+const MENU_FILE_NEW_ID: &str = "file_new";
+const MENU_FILE_OPEN_ID: &str = "file_open";
+const MENU_FILE_SAVE_ID: &str = "file_save";
+const MENU_FILE_OPEN_RECENT_PREFIX: &str = "file_open_recent_";
+const MENU_FILE_CLEAR_RECENT_ID: &str = "file_clear_recent";
+const MENU_EVENT_NEW: &str = "quill://menu-new";
+const MENU_EVENT_OPEN: &str = "quill://menu-open";
+const MENU_EVENT_SAVE: &str = "quill://menu-save";
+const MENU_EVENT_OPEN_PATH: &str = "quill://menu-open-path";
 
 fn collect_file_paths(files: &[PathBuf]) -> Vec<String> {
     files
@@ -41,6 +58,286 @@ fn reset_state_for_new_window(
     guard.pending_files = collect_file_paths(files);
 }
 
+fn normalize_recent_paths(paths: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for path in paths.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        if normalized.iter().any(|existing| existing == path) {
+            continue;
+        }
+        normalized.push(path.to_string());
+        if normalized.len() >= MAX_RECENT_FILES {
+            break;
+        }
+    }
+    normalized
+}
+
+fn recent_files_storage_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join(RECENT_FILE_STORAGE_NAME))
+}
+
+fn load_recent_files<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Vec<String> {
+    let Some(path) = recent_files_storage_path(app) else {
+        return vec![];
+    };
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return vec![];
+    };
+    let Ok(parsed) = serde_json::from_str::<Vec<String>>(&raw) else {
+        return vec![];
+    };
+    normalize_recent_paths(&parsed)
+}
+
+fn persist_recent_files<R: tauri::Runtime>(app: &tauri::AppHandle<R>, files: &[String]) {
+    let Some(path) = recent_files_storage_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(files) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn add_recent_file(state: &Mutex<RecentFilesState>, path: &str) -> Vec<String> {
+    let mut guard = state.lock().expect("recent-files state mutex poisoned");
+    guard.files.retain(|existing| existing != path);
+    guard.files.insert(0, path.to_string());
+    guard.files.truncate(MAX_RECENT_FILES);
+    guard.files.clone()
+}
+
+fn clear_recent_files(state: &Mutex<RecentFilesState>) -> Vec<String> {
+    let mut guard = state.lock().expect("recent-files state mutex poisoned");
+    guard.files.clear();
+    guard.files.clone()
+}
+
+fn format_recent_label(path: &str) -> String {
+    let candidate = PathBuf::from(path);
+    let filename = candidate
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path);
+    let parent = candidate
+        .parent()
+        .and_then(|p| p.to_str())
+        .filter(|p| !p.is_empty());
+    match parent {
+        Some(parent_path) => format!("{filename}  ({parent_path})"),
+        None => filename.to_string(),
+    }
+}
+
+fn build_app_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    recent_files: &[String],
+) -> tauri::Result<Menu<R>> {
+    let new_item = MenuItem::with_id(app, MENU_FILE_NEW_ID, "New", true, Some("CmdOrCtrl+N"))?;
+    let open_item = MenuItem::with_id(app, MENU_FILE_OPEN_ID, "Open...", true, Some("CmdOrCtrl+O"))?;
+    let save_item = MenuItem::with_id(app, MENU_FILE_SAVE_ID, "Save", true, Some("CmdOrCtrl+S"))?;
+    let close_window = PredefinedMenuItem::close_window(app, None)?;
+
+    let mut recent_items: Vec<MenuItem<R>> = Vec::new();
+    for (index, path) in recent_files.iter().enumerate() {
+        recent_items.push(MenuItem::with_id(
+            app,
+            format!("{MENU_FILE_OPEN_RECENT_PREFIX}{index}"),
+            format_recent_label(path),
+            true,
+            None::<&str>,
+        )?);
+    }
+
+    let empty_recent_item = MenuItem::with_id(
+        app,
+        "file_open_recent_empty",
+        "No Recent Files",
+        false,
+        None::<&str>,
+    )?;
+    let clear_recent_item = MenuItem::with_id(
+        app,
+        MENU_FILE_CLEAR_RECENT_ID,
+        "Clear Menu",
+        !recent_files.is_empty(),
+        None::<&str>,
+    )?;
+    let separator = PredefinedMenuItem::separator(app)?;
+
+    let mut open_recent_refs: Vec<&dyn tauri::menu::IsMenuItem<R>> = Vec::new();
+    if recent_items.is_empty() {
+        open_recent_refs.push(&empty_recent_item);
+    } else {
+        for item in &recent_items {
+            open_recent_refs.push(item as &dyn tauri::menu::IsMenuItem<R>);
+        }
+    }
+    open_recent_refs.push(&separator);
+    open_recent_refs.push(&clear_recent_item);
+    let open_recent_submenu = Submenu::with_items(app, "Open Recent", true, &open_recent_refs)?;
+
+    let file_submenu = Submenu::with_items(
+        app,
+        "File",
+        true,
+        &[
+            &new_item,
+            &open_item,
+            &open_recent_submenu,
+            &save_item,
+            &close_window,
+        ],
+    )?;
+
+    let edit_submenu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    #[cfg(target_os = "macos")]
+    let app_submenu = Submenu::with_items(
+        app,
+        app.package_info().name.clone(),
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, None)?,
+        ],
+    )?;
+
+    #[cfg(target_os = "macos")]
+    let view_submenu = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[&PredefinedMenuItem::fullscreen(app, None)?],
+    )?;
+
+    let window_submenu = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+
+    #[cfg(target_os = "macos")]
+    let help_submenu = {
+        let empty: [&dyn tauri::menu::IsMenuItem<R>; 0] = [];
+        Submenu::with_items(app, "Help", true, &empty)?
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let help_submenu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[&PredefinedMenuItem::about(app, None, None)?],
+    )?;
+
+    let mut top_level_menus: Vec<&dyn tauri::menu::IsMenuItem<R>> = Vec::new();
+    #[cfg(target_os = "macos")]
+    top_level_menus.push(&app_submenu);
+    top_level_menus.push(&file_submenu);
+    top_level_menus.push(&edit_submenu);
+    #[cfg(target_os = "macos")]
+    top_level_menus.push(&view_submenu);
+    top_level_menus.push(&window_submenu);
+    top_level_menus.push(&help_submenu);
+
+    Menu::with_items(app, &top_level_menus)
+}
+
+fn install_app_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    recent_files: &[String],
+) -> tauri::Result<()> {
+    let menu = build_app_menu(app, recent_files)?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
+fn emit_menu_event_to_active_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    event: &str,
+) -> tauri::Result<()> {
+    app.emit(event, ())
+}
+
+fn emit_open_path_event_to_active_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &str,
+) -> tauri::Result<()> {
+    app.emit(MENU_EVENT_OPEN_PATH, path.to_string())
+}
+
+fn handle_menu_event(
+    app: &tauri::AppHandle,
+    event: tauri::menu::MenuEvent,
+) {
+    let id = event.id().as_ref().to_string();
+
+    if id == MENU_FILE_NEW_ID {
+        let _ = emit_menu_event_to_active_window(app, MENU_EVENT_NEW);
+        return;
+    }
+    if id == MENU_FILE_OPEN_ID {
+        let _ = emit_menu_event_to_active_window(app, MENU_EVENT_OPEN);
+        return;
+    }
+    if id == MENU_FILE_SAVE_ID {
+        let _ = emit_menu_event_to_active_window(app, MENU_EVENT_SAVE);
+        return;
+    }
+    if id == MENU_FILE_CLEAR_RECENT_ID {
+        let recent_state = app.state::<Mutex<RecentFilesState>>();
+        let updated = clear_recent_files(&recent_state);
+        persist_recent_files(app, &updated);
+        let _ = install_app_menu(app, &updated);
+        return;
+    }
+    if let Some(index_str) = id.strip_prefix(MENU_FILE_OPEN_RECENT_PREFIX) {
+        if let Ok(index) = index_str.parse::<usize>() {
+            let recent_state = app.state::<Mutex<RecentFilesState>>();
+            let path = {
+                let guard = recent_state
+                    .lock()
+                    .expect("recent-files state mutex poisoned");
+                guard.files.get(index).cloned()
+            };
+            if let Some(path) = path {
+                let _ = emit_open_path_event_to_active_window(app, &path);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 fn register_frontend_ready(
     state: tauri::State<'_, Mutex<OpenFileState>>,
@@ -51,6 +348,20 @@ fn register_frontend_ready(
 #[tauri::command]
 fn read_markdown_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("failed to read {path}: {e}"))
+}
+
+#[tauri::command]
+fn track_recent_file(
+    app: tauri::AppHandle,
+    recent_state: tauri::State<'_, Mutex<RecentFilesState>>,
+    path: String,
+) {
+    if path.trim().is_empty() {
+        return;
+    }
+    let updated = add_recent_file(&recent_state, path.trim());
+    persist_recent_files(&app, &updated);
+    let _ = install_app_menu(&app, &updated);
 }
 
 fn build_init_script(files: &[PathBuf]) -> String {
@@ -176,13 +487,26 @@ fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
 pub fn run() {
     tauri::Builder::default()
         .manage(Mutex::new(OpenFileState::default()))
+        .manage(Mutex::new(RecentFilesState::default()))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             register_frontend_ready,
-            read_markdown_file
+            read_markdown_file,
+            track_recent_file
         ])
+        .on_menu_event(handle_menu_event)
         .setup(|app| {
+            let recent_files = load_recent_files(app.handle());
+            {
+                let recent_state = app.state::<Mutex<RecentFilesState>>();
+                let mut guard = recent_state
+                    .lock()
+                    .expect("recent-files state mutex poisoned");
+                guard.files = recent_files.clone();
+            }
+            install_app_menu(app.handle(), &recent_files)?;
+
             // Check command line args for files (works on all platforms)
             let mut files = Vec::new();
             for maybe_file in std::env::args().skip(1) {
@@ -369,5 +693,31 @@ mod tests {
         let content = read_markdown_file(path.to_string()).expect("read file");
         assert_eq!(content, "# ok\nbody");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn normalize_recent_paths_deduplicates_and_trims() {
+        let input = vec![
+            " /tmp/one.md ".to_string(),
+            "".to_string(),
+            "/tmp/two.md".to_string(),
+            "/tmp/one.md".to_string(),
+        ];
+        assert_eq!(
+            normalize_recent_paths(&input),
+            vec!["/tmp/one.md".to_string(), "/tmp/two.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn add_recent_file_moves_existing_to_front() {
+        let state = Mutex::new(RecentFilesState {
+            files: vec!["/tmp/a.md".to_string(), "/tmp/b.md".to_string()],
+        });
+        let updated = add_recent_file(&state, "/tmp/b.md");
+        assert_eq!(
+            updated,
+            vec!["/tmp/b.md".to_string(), "/tmp/a.md".to_string()]
+        );
     }
 }

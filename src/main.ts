@@ -5,6 +5,7 @@ import Placeholder from '@tiptap/extension-placeholder'
 import Typography from '@tiptap/extension-typography'
 import { Mathematics } from '@tiptap/extension-mathematics'
 import { getMarkdownFromEditor, setMarkdownInEditor } from './editor-markdown'
+import { getMarkdownPasteContent } from './markdown-paste'
 import { openFirstWorkingStartupFile, selectStartupFiles } from './startup-files'
 
 // State
@@ -18,6 +19,7 @@ let dialogApiPromise: Promise<typeof import('@tauri-apps/plugin-dialog')> | null
 let fsApiPromise: Promise<typeof import('@tauri-apps/plugin-fs')> | null = null
 let coreApiPromise: Promise<typeof import('@tauri-apps/api/core')> | null = null
 let windowApiPromise: Promise<typeof import('@tauri-apps/api/window')> | null = null
+let eventApiPromise: Promise<typeof import('@tauri-apps/api/event')> | null = null
 let mathMigrationModulePromise: Promise<typeof import('./math-migration')> | null = null
 let katexCssPromise: Promise<unknown> | null = null
 
@@ -157,6 +159,18 @@ function createEditor(content: any = '') {
     editorProps: {
       attributes: {
         class: 'tiptap',
+      },
+      handlePaste: (_view, event) => {
+        if (editor.state.selection.$from.parent.type.spec.code) {
+          return false
+        }
+
+        const markdown = getMarkdownPasteContent(event)
+        if (!markdown) {
+          return false
+        }
+
+        return editor.commands.insertContent(markdown, { contentType: 'markdown' })
       },
     },
     onCreate: ({ editor: currentEditor }) => {
@@ -356,6 +370,13 @@ function getWindowApi() {
   return windowApiPromise
 }
 
+function getEventApi() {
+  if (!eventApiPromise) {
+    eventApiPromise = import('@tauri-apps/api/event')
+  }
+  return eventApiPromise
+}
+
 async function showCurrentWindow(): Promise<void> {
   // Browser/non-Tauri contexts should skip window API loading entirely.
   if (!(window as any).__TAURI_INTERNALS__) {
@@ -367,6 +388,79 @@ async function showCurrentWindow(): Promise<void> {
     await getCurrentWindow().show()
   } catch (e) {
     console.error('Failed to show window:', e)
+  }
+}
+
+function setupTitlebarDragging() {
+  const titlebarEl = document.getElementById('titlebar')
+  if (!titlebarEl || !(window as any).__TAURI_INTERNALS__) {
+    return
+  }
+
+  titlebarEl.addEventListener('mousedown', async (event) => {
+    // Only start drag on primary-button press in explicit drag regions.
+    if (event.button !== 0) {
+      return
+    }
+
+    const target = event.target as HTMLElement | null
+    const dragRegion = target?.closest('[data-tauri-drag-region]')
+    if (!dragRegion) {
+      return
+    }
+
+    try {
+      const { getCurrentWindow } = await getWindowApi()
+      await getCurrentWindow().startDragging()
+    } catch (e) {
+      console.error('Failed to start window drag:', e)
+    }
+  })
+}
+
+function setupMenuEventListeners() {
+  if (!(window as any).__TAURI_INTERNALS__) {
+    return
+  }
+
+  void (async () => {
+    try {
+      const { listen } = await getEventApi()
+      await listen('quill://menu-new', () => {
+        if (!document.hasFocus()) return
+        void newFile()
+      })
+      await listen('quill://menu-open', () => {
+        if (!document.hasFocus()) return
+        void openFile()
+      })
+      await listen('quill://menu-save', () => {
+        if (!document.hasFocus()) return
+        void saveFile()
+      })
+      await listen<string>('quill://menu-open-path', (event) => {
+        if (!document.hasFocus()) return
+        const filePath = event.payload?.trim()
+        if (filePath) {
+          void openFilePath(filePath)
+        }
+      })
+    } catch (e) {
+      console.error('Failed to set up menu event listeners:', e)
+    }
+  })()
+}
+
+async function trackRecentFile(filePath: string): Promise<void> {
+  if (!(window as any).__TAURI_INTERNALS__) {
+    return
+  }
+
+  try {
+    const { invoke } = await getCoreApi()
+    await invoke('track_recent_file', { path: filePath })
+  } catch (e) {
+    console.warn('Failed to track recent file:', e)
   }
 }
 
@@ -460,6 +554,7 @@ async function saveFile() {
       currentFilePath = targetPath
       setFilename(getBasename(targetPath))
       setModified(false)
+      await trackRecentFile(targetPath)
     }
   } catch (e) {
     console.error('Save failed:', e)
@@ -539,6 +634,7 @@ async function openFilePath(filePath: string): Promise<boolean> {
     currentFilePath = filePath
     setFilename(getBasename(filePath))
     setModified(false)
+    await trackRecentFile(filePath)
     logPerf(`openFilePath total (${getBasename(filePath)})`, tOpenStart)
     return true
   } catch (e) {
@@ -582,6 +678,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   createEditor()
   logPerf('createEditor', tCreateEditorStart)
   setupKeyboardShortcuts()
+  setupMenuEventListeners()
+  setupTitlebarDragging()
   setFilename('untitled.md')
 
   const startupFiles = selectStartupFiles(

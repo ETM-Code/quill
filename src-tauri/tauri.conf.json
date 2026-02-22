@@ -31,7 +31,12 @@
         "ext": ["md", "markdown"],
         "mimeType": "text/markdown",
         "description": "Markdown Document",
-        "role": "Editor"
+        "role": "Editor",
+        "rank": "Owner",
+        "exportedType": {
+          "identifier": "com.eoghancollins.quill.markdown",
+          "conformsTo": ["public.text", "public.data"]
+        }
       },
       {
         "ext": ["txt"],
@@ -41,7 +46,8 @@
       }
     ],
     "macOS": {
-      "minimumSystemVersion": "10.15"
+      "minimumSystemVersion": "10.15",
+      "infoPlist": "Info.plist"
     }
   }
 }

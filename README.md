@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="quill.svg" alt="Quill logo" width="180" />
+</p>
+
+<p align="center">
   <img src="screenshot.png" alt="Quill" width="700" />
 </p>
 
@@ -36,20 +40,23 @@ The `.app` bundle and `.dmg` installer will be in `src-tauri/target/release/bund
 - **Syntax highlighting** — Code blocks with language detection. Lazy-loaded so it doesn't slow down launch.
 - **Light & dark mode** — Follows your system appearance automatically.
 - **Native macOS** — Overlay titlebar with traffic lights. File associations for `.md`, `.markdown`, `.txt`.
+- **Open Recent** — Reopen recently used documents from `File > Open Recent` (persisted between launches).
 - **Tiny footprint** — 11 MB app bundle, 4.6 MB DMG. Half the size of MacDown.
 
 ## Benchmarks
 
-Time from `open -a Quill.app` to window visible, averaged over 5 runs (Apple M3, macOS 26.2):
+Time from `open -a <App>.app` to window visible, averaged over 5 runs (Apple M3, macOS 26.2):
 
 | Test | Quill | MacDown |
 |------|------:|--------:|
-| Empty launch | **543ms** | 769ms |
-| Open 720B note | **602ms** | 646ms |
-| Open 14KB document | 698ms | **625ms** |
-| Open 214KB document | 2349ms | **674ms** |
+| Empty launch | **640ms** | 856ms |
+| Open 720B note | **567ms** | 765ms |
+| Open 14KB document | **509ms** | 679ms |
+| Open 214KB document | **550ms** | 798ms |
 
-Quill launches ~30% faster than MacDown for new documents. For large files (200KB+), MacDown is faster because it renders a plain text editor + HTML preview pane, while Quill parses the entire document into a rich WYSIWYG editor DOM.
+Quill wins every launch/open scenario in this run.
+
+Methodology note: these runs were interleaved (Quill, then MacDown, repeat) while my Mac was busy doing normal work with a dozen other apps/tabs/processes open. Absolute times should improve on an idle machine, but real-world loaded behavior is the benchmark that matters most.
 
 **Size comparison:**
 
