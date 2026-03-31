@@ -9,8 +9,8 @@
 <h1 align="center">Quill</h1>
 
 <p align="center">
-  A fast, native markdown editor for macOS.<br/>
-  WYSIWYG editing with LaTeX math, syntax highlighting, and a 4.6 MB download.
+  A fast, native markdown editor for macOS, Windows, and Linux.<br/>
+  WYSIWYG editing with LaTeX math and syntax highlighting.
 </p>
 
 <p align="center">
@@ -24,22 +24,23 @@
 
 ## Install
 
-Download the latest `.dmg` from [Releases](https://github.com/ETM-Code/quill/releases), or build from source:
+Download the latest release for your platform from [Releases](https://github.com/ETM-Code/quill/releases), or build from source:
 
 ```bash
 bun install
 bun run tauri build
 ```
 
-The `.app` bundle and `.dmg` installer will be in `src-tauri/target/release/bundle/`.
+Built installers will be in `src-tauri/target/release/bundle/` (for example: `.dmg` on macOS, `.msi`/`.nsis` on Windows, `.deb`/`.AppImage` on Linux).
 
 ## Features
 
 - **WYSIWYG markdown** — Write in rich text, save as `.md`. Headings, bold, italic, lists, blockquotes, code, links.
+- **Images** — Render and round-trip standard Markdown images. Insert by URL or file path from the block menu.
 - **LaTeX math** — Inline `$E=mc^2$` and block `$$...$$` equations rendered live via KaTeX.
 - **Syntax highlighting** — Code blocks with language detection. Lazy-loaded so it doesn't slow down launch.
 - **Light & dark mode** — Follows your system appearance automatically.
-- **Native macOS** — Overlay titlebar with traffic lights. File associations for `.md`, `.markdown`, `.txt`.
+- **Native desktop** — macOS uses an overlay titlebar; Windows/Linux use native titlebars. File associations for `.md`, `.markdown`, `.txt`.
 - **Open Recent** — Reopen recently used documents from `File > Open Recent` (persisted between launches).
 - **Tiny footprint** — 11 MB app bundle, 4.6 MB DMG. Half the size of MacDown.
 
@@ -73,8 +74,8 @@ Quill is a [Tauri 2](https://tauri.app) app. The backend is Rust; the frontend r
 
 - **Lazy-loaded code highlighting** — [lowlight](https://github.com/wooorm/lowlight) (45KB gzipped) is only loaded when you type your first code fence. This keeps the initial bundle fast.
 - **Guarded math migration** — The `$...$` to KaTeX node conversion only runs when a transaction actually contains dollar signs, avoiding expensive DOM walks on every keystroke.
-- **Window URL params** — Files opened via macOS file association are passed to the frontend through URL query params, avoiding race conditions with Tauri's IPC bridge.
-- **Keepalive window** — A hidden window keeps the process alive on macOS when all editor windows are closed, so re-opening is instant.
+- **Window URL params** — Files opened via OS file association are passed to the frontend through URL query params, avoiding race conditions with Tauri's IPC bridge.
+- **Keepalive window (macOS)** — A hidden window keeps the process alive on macOS when all editor windows are closed, so re-opening is instant.
 
 ```
 quill/
@@ -94,9 +95,9 @@ quill/
 
 | Shortcut | Action |
 |----------|--------|
-| `Cmd+S` | Save |
-| `Cmd+O` | Open |
-| `Cmd+N` | New |
+| `Cmd/Ctrl+S` | Save |
+| `Cmd/Ctrl+O` | Open |
+| `Cmd/Ctrl+N` | New |
 | `# ` | Heading (1-6 levels) |
 | `- ` | Bullet list |
 | `1. ` | Ordered list |
@@ -113,7 +114,10 @@ bun run tauri dev  # Dev server with hot reload
 bun run tauri build # Production build
 ```
 
-**Requirements:** [Bun](https://bun.sh), [Rust](https://rustup.rs), Xcode Command Line Tools.
+**Requirements:** [Bun](https://bun.sh), [Rust](https://rustup.rs), plus platform build deps:
+- macOS: Xcode Command Line Tools
+- Linux: `webkit2gtk` + `libgtk-3` development packages
+- Windows: WebView2 runtime (usually already present on Windows 11)
 
 **Tests:**
 

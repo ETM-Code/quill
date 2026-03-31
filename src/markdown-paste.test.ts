@@ -20,6 +20,10 @@ describe('markdown paste detection', () => {
     expect(looksLikeMarkdown('use **bold** here')).toBe(true)
   })
 
+  test('looksLikeMarkdown detects markdown tables', () => {
+    expect(looksLikeMarkdown('| a | b |\n|---|---|\n| 1 | 2 |')).toBe(true)
+  })
+
   test('looksLikeMarkdown ignores plain text', () => {
     expect(looksLikeMarkdown('hello world')).toBe(false)
   })

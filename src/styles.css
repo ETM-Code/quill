@@ -60,6 +60,12 @@ body {
   overflow: hidden;
 }
 
+#app.platform-windows,
+#app.platform-linux,
+#app.platform-unknown {
+  border-radius: 0;
+}
+
 /* Titlebar */
 #titlebar {
   height: var(--titlebar-height);
@@ -75,9 +81,21 @@ body {
   flex-shrink: 0;
 }
 
+#app.platform-windows #titlebar,
+#app.platform-linux #titlebar,
+#app.platform-unknown #titlebar {
+  display: none;
+}
+
 .traffic-lights-spacer {
   width: 78px; /* Space for macOS traffic lights */
   flex-shrink: 0;
+}
+
+#app.platform-windows .traffic-lights-spacer,
+#app.platform-linux .traffic-lights-spacer,
+#app.platform-unknown .traffic-lights-spacer {
+  display: none;
 }
 
 .titlebar-spacer {
@@ -123,6 +141,56 @@ body {
   margin: 0 auto;
   min-height: 100%;
   outline: none;
+}
+
+.find-bar {
+  position: fixed;
+  top: calc(var(--titlebar-height) + 12px);
+  right: 16px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--bg-primary) 92%, var(--accent-subtle) 8%);
+  box-shadow: 0 10px 30px color-mix(in oklab, var(--bg-primary) 78%, black 22%);
+}
+
+#app.platform-windows .find-bar,
+#app.platform-linux .find-bar,
+#app.platform-unknown .find-bar {
+  top: 12px;
+}
+
+.find-input {
+  min-width: 220px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  font: inherit;
+}
+
+.find-input:focus {
+  outline: 2px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  outline-offset: 0;
+}
+
+.find-bar button {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.find-bar button:hover {
+  background: var(--accent-subtle);
 }
 
 /* Tiptap Editor Styles */
@@ -178,6 +246,45 @@ body {
 
 .tiptap p:last-child {
   margin-bottom: 0;
+}
+
+/* Tables */
+.tiptap .tableWrapper {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 1em 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tiptap .tableWrapper > table {
+  width: max-content !important;
+  min-width: 100%;
+  border-collapse: collapse;
+  table-layout: auto !important;
+}
+
+.tiptap .tableWrapper th,
+.tiptap .tableWrapper td {
+  border: 1px solid var(--border);
+  padding: 0.45em 0.6em;
+  vertical-align: top;
+  min-width: 10ch;
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  hyphens: none;
+}
+
+.tiptap .tableWrapper th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+}
+
+.tiptap td p,
+.tiptap th p {
+  margin: 0;
 }
 
 /* Links */
@@ -317,6 +424,111 @@ body {
   text-align: center;
   margin: 1em 0;
   padding: 1em;
+}
+
+/* Lazy-loaded editor menus */
+.editor-bubble-menu,
+.editor-floating-menu {
+  display: inline-flex;
+  gap: 0.35rem;
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 6px 20px color-mix(in oklab, var(--bg) 80%, black 20%);
+}
+
+.editor-bubble-menu button,
+.editor-floating-menu button {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  padding: 0.2rem 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.editor-bubble-menu button:hover,
+.editor-floating-menu button:hover {
+  background: var(--accent-subtle);
+  border-color: var(--border);
+}
+
+.editor-floating-menu {
+  position: relative;
+}
+
+.editor-floating-menu .floating-menu-panel {
+  display: none;
+}
+
+.editor-floating-menu[data-mode="insert"] .floating-menu-panel-insert,
+.editor-floating-menu[data-mode="table"] .floating-menu-panel-table {
+  display: inline-flex;
+}
+
+.editor-floating-menu .insert-toggle {
+  font-weight: 700;
+  min-width: 2rem;
+}
+
+.editor-floating-menu .insert-menu-items {
+  display: none;
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 10rem;
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 6px 20px color-mix(in oklab, var(--bg) 80%, black 20%);
+}
+
+.editor-floating-menu.insert-menu-open .insert-menu-items {
+  display: flex;
+}
+
+.floating-menu-panel-table {
+  flex-wrap: wrap;
+  max-width: min(34rem, calc(100vw - 2rem));
+}
+
+.floating-menu-panel-table button {
+  white-space: nowrap;
+}
+
+@media print {
+  html,
+  body {
+    overflow: visible;
+    background: #fff;
+  }
+
+  #app {
+    border-radius: 0;
+    overflow: visible;
+    background: #fff;
+  }
+
+  #titlebar,
+  .editor-bubble-menu,
+  .editor-floating-menu,
+  .find-bar {
+    display: none !important;
+  }
+
+  #editor-container {
+    overflow: visible;
+    padding: 0;
+  }
+
+  #editor {
+    max-width: none;
+  }
 }
 
 /* Code highlighting (lowlight) - lazy loaded */

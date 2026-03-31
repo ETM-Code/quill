@@ -1,8 +1,10 @@
 use std::path::PathBuf;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use url::form_urlencoded;
 
 macro_rules! debug_log {
@@ -23,17 +25,26 @@ struct RecentFilesState {
     files: Vec<String>,
 }
 
+#[derive(Default, Debug)]
+struct ModifiedWindowsState {
+    labels: HashSet<String>,
+}
+
 static WINDOW_COUNTER: AtomicUsize = AtomicUsize::new(1);
 const MAX_RECENT_FILES: usize = 10;
 const RECENT_FILE_STORAGE_NAME: &str = "recent-files.json";
 const MENU_FILE_NEW_ID: &str = "file_new";
 const MENU_FILE_OPEN_ID: &str = "file_open";
 const MENU_FILE_SAVE_ID: &str = "file_save";
+const MENU_FILE_PRINT_ID: &str = "file_print";
+const MENU_FILE_CLOSE_ID: &str = "file_close";
+const MENU_EDIT_FIND_ID: &str = "edit_find";
 const MENU_FILE_OPEN_RECENT_PREFIX: &str = "file_open_recent_";
 const MENU_FILE_CLEAR_RECENT_ID: &str = "file_clear_recent";
 const MENU_EVENT_NEW: &str = "quill://menu-new";
 const MENU_EVENT_OPEN: &str = "quill://menu-open";
 const MENU_EVENT_SAVE: &str = "quill://menu-save";
+const MENU_EVENT_PRINT: &str = "quill://menu-print";
 const MENU_EVENT_OPEN_PATH: &str = "quill://menu-open-path";
 
 fn collect_file_paths(files: &[PathBuf]) -> Vec<String> {
@@ -141,7 +152,9 @@ fn build_app_menu<R: tauri::Runtime>(
     let new_item = MenuItem::with_id(app, MENU_FILE_NEW_ID, "New", true, Some("CmdOrCtrl+N"))?;
     let open_item = MenuItem::with_id(app, MENU_FILE_OPEN_ID, "Open...", true, Some("CmdOrCtrl+O"))?;
     let save_item = MenuItem::with_id(app, MENU_FILE_SAVE_ID, "Save", true, Some("CmdOrCtrl+S"))?;
-    let close_window = PredefinedMenuItem::close_window(app, None)?;
+    let print_item = MenuItem::with_id(app, MENU_FILE_PRINT_ID, "Print...", true, Some("CmdOrCtrl+P"))?;
+    let close_window = MenuItem::with_id(app, MENU_FILE_CLOSE_ID, "Close Window", true, Some("CmdOrCtrl+W"))?;
+    let find_item = MenuItem::with_id(app, MENU_EDIT_FIND_ID, "Find", true, Some("CmdOrCtrl+F"))?;
 
     let mut recent_items: Vec<MenuItem<R>> = Vec::new();
     for (index, path) in recent_files.iter().enumerate() {
@@ -191,6 +204,7 @@ fn build_app_menu<R: tauri::Runtime>(
             &open_item,
             &open_recent_submenu,
             &save_item,
+            &print_item,
             &close_window,
         ],
     )?;
@@ -206,6 +220,8 @@ fn build_app_menu<R: tauri::Runtime>(
             &PredefinedMenuItem::cut(app, None)?,
             &PredefinedMenuItem::copy(app, None)?,
             &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &find_item,
             &PredefinedMenuItem::select_all(app, None)?,
         ],
     )?;
@@ -283,18 +299,127 @@ fn install_app_menu<R: tauri::Runtime>(
     Ok(())
 }
 
-fn emit_menu_event_to_active_window<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    event: &str,
-) -> tauri::Result<()> {
-    app.emit(event, ())
-}
-
 fn emit_open_path_event_to_active_window<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path: &str,
 ) -> tauri::Result<()> {
+    if let Some(window) = app
+        .webview_windows()
+        .into_iter()
+        .find_map(|(_, window)| {
+            if window.is_focused().unwrap_or(false) {
+                Some(window)
+            } else {
+                None
+            }
+        })
+    {
+        return window.emit(MENU_EVENT_OPEN_PATH, path.to_string());
+    }
     app.emit(MENU_EVENT_OPEN_PATH, path.to_string())
+}
+
+fn dispatch_dom_event_to_window<R: tauri::Runtime>(
+    window: &tauri::Window<R>,
+    event_name: &str,
+) -> tauri::Result<()> {
+    let Ok(event_json) = serde_json::to_string(event_name) else {
+        return Ok(());
+    };
+
+    if let Some(webview) = window
+        .webviews()
+        .into_iter()
+        .next()
+    {
+        return webview.eval(format!(
+            "window.dispatchEvent(new CustomEvent({event_json}));"
+        ));
+    }
+
+    Ok(())
+}
+
+fn handle_window_menu_event<R: tauri::Runtime>(
+    window: &tauri::Window<R>,
+    event: tauri::menu::MenuEvent,
+) {
+    let id = event.id().as_ref().to_string();
+
+    if id == MENU_FILE_NEW_ID {
+        let _ = window.emit(MENU_EVENT_NEW, ());
+        return;
+    }
+    if id == MENU_FILE_OPEN_ID {
+        let _ = window.emit(MENU_EVENT_OPEN, ());
+        return;
+    }
+    if id == MENU_FILE_SAVE_ID {
+        let _ = window.emit(MENU_EVENT_SAVE, ());
+        return;
+    }
+    if id == MENU_FILE_PRINT_ID {
+        let _ = window.emit(MENU_EVENT_PRINT, ());
+        return;
+    }
+    if id == MENU_FILE_CLOSE_ID {
+        let _ = window.close();
+        return;
+    }
+    if id == MENU_EDIT_FIND_ID {
+        let _ = dispatch_dom_event_to_window(window, "quill:menu-find");
+    }
+}
+
+fn bind_window_close_guard<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    let app = window.app_handle().clone();
+    let label = window.label().to_string();
+    let window_for_close = window.clone();
+
+    window.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            let should_prompt = {
+                let modified_state = app.state::<Mutex<ModifiedWindowsState>>();
+                let guard = modified_state
+                    .lock()
+                    .expect("modified-windows state mutex poisoned");
+                guard.labels.contains(&label)
+            };
+
+            if !should_prompt {
+                return;
+            }
+
+            api.prevent_close();
+
+            let app_handle = app.clone();
+            let window_handle = window_for_close.clone();
+            let label_for_remove = label.clone();
+            app.dialog()
+                .message("You have unsaved changes. Discard them?")
+                .title("Unsaved Changes")
+                .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Discard".to_string(),
+                    "Cancel".to_string(),
+                ))
+                .show(move |confirmed| {
+                    if !confirmed {
+                        return;
+                    }
+
+                    {
+                        let modified_state = app_handle.state::<Mutex<ModifiedWindowsState>>();
+                        let mut guard = modified_state
+                            .lock()
+                            .expect("modified-windows state mutex poisoned");
+                        guard.labels.remove(&label_for_remove);
+                    }
+
+                    let _ = window_handle.destroy();
+                });
+        }
+    });
 }
 
 fn handle_menu_event(
@@ -303,18 +428,6 @@ fn handle_menu_event(
 ) {
     let id = event.id().as_ref().to_string();
 
-    if id == MENU_FILE_NEW_ID {
-        let _ = emit_menu_event_to_active_window(app, MENU_EVENT_NEW);
-        return;
-    }
-    if id == MENU_FILE_OPEN_ID {
-        let _ = emit_menu_event_to_active_window(app, MENU_EVENT_OPEN);
-        return;
-    }
-    if id == MENU_FILE_SAVE_ID {
-        let _ = emit_menu_event_to_active_window(app, MENU_EVENT_SAVE);
-        return;
-    }
     if id == MENU_FILE_CLEAR_RECENT_ID {
         let recent_state = app.state::<Mutex<RecentFilesState>>();
         let updated = clear_recent_files(&recent_state);
@@ -351,6 +464,11 @@ fn read_markdown_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn write_markdown_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| format!("failed to write {path}: {e}"))
+}
+
+#[tauri::command]
 fn track_recent_file(
     app: tauri::AppHandle,
     recent_state: tauri::State<'_, Mutex<RecentFilesState>>,
@@ -362,6 +480,36 @@ fn track_recent_file(
     let updated = add_recent_file(&recent_state, path.trim());
     persist_recent_files(&app, &updated);
     let _ = install_app_menu(&app, &updated);
+}
+
+#[tauri::command]
+fn destroy_window(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(label.trim()) else {
+        return Err("window not found".to_string());
+    };
+
+    window.destroy().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_window_modified(
+    modified_state: tauri::State<'_, Mutex<ModifiedWindowsState>>,
+    label: String,
+    modified: bool,
+) {
+    let trimmed = label.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let mut guard = modified_state
+        .lock()
+        .expect("modified-windows state mutex poisoned");
+    if modified {
+        guard.labels.insert(trimmed.to_string());
+    } else {
+        guard.labels.remove(trimmed);
+    }
 }
 
 fn build_init_script(files: &[PathBuf]) -> String {
@@ -387,14 +535,33 @@ fn build_init_script(files: &[PathBuf]) -> String {
 }
 
 fn build_window_url(files: &[PathBuf]) -> WebviewUrl {
+    let mut query = form_urlencoded::Serializer::new(String::new());
+    query.append_pair("platform", runtime_platform_name());
+
     if let Some(path) = files.first().and_then(|f| f.to_str()) {
-        let query = form_urlencoded::Serializer::new(String::new())
-            .append_pair("open", path)
-            .finish();
-        return WebviewUrl::App(format!("index.html?{query}").into());
+        query.append_pair("open", path);
     }
 
-    WebviewUrl::App("index.html".into())
+    WebviewUrl::App(format!("index.html?{}", query.finish()).into())
+}
+
+fn runtime_platform_name() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "macos"
+    }
+    #[cfg(windows)]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux"
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    {
+        "unknown"
+    }
 }
 
 fn create_editor_window(
@@ -410,17 +577,25 @@ fn create_editor_window(
 
     let init_script = build_init_script(&files);
     let window_url = build_window_url(&files);
-    let _window = WebviewWindowBuilder::new(app, label, window_url)
+    let builder = WebviewWindowBuilder::new(app, label, window_url)
         .initialization_script(&init_script)
         .title("Quill")
         .visible(true)
         .inner_size(900.0, 700.0)
         .min_inner_size(400.0, 300.0)
+        .devtools(cfg!(debug_assertions));
+
+    #[cfg(target_os = "macos")]
+    let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .hidden_title(true)
-        .devtools(cfg!(debug_assertions))
+        .hidden_title(true);
+
+    let _window = builder
         .build()
         .expect("failed to create window");
+
+    _window.on_menu_event(handle_window_menu_event);
+    bind_window_close_guard(&_window);
 
     // Open devtools automatically for debugging
     #[cfg(debug_assertions)]
@@ -488,12 +663,16 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Mutex::new(OpenFileState::default()))
         .manage(Mutex::new(RecentFilesState::default()))
+        .manage(Mutex::new(ModifiedWindowsState::default()))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             register_frontend_ready,
             read_markdown_file,
-            track_recent_file
+            write_markdown_file,
+            track_recent_file,
+            destroy_window,
+            set_window_modified
         ])
         .on_menu_event(handle_menu_event)
         .setup(|app| {
@@ -583,20 +762,6 @@ pub fn run() {
                     if !has_visible_windows && app.get_webview_window("main").is_none() {
                         debug_log!("DEBUG: Reopen with no visible windows, creating main window");
                         handle_file_associations(app, vec![]);
-                    }
-                }
-                #[cfg(target_os = "macos")]
-                tauri::RunEvent::ExitRequested { code, api, .. } => {
-                    if code.is_none() {
-                        let has_keepalive_window = app.get_webview_window("keepalive").is_some();
-                        let has_editor_windows = app
-                            .webview_windows()
-                            .keys()
-                            .any(|label| label.as_str() != "keepalive");
-                        if has_keepalive_window && !has_editor_windows {
-                            debug_log!("DEBUG: Preventing exit after last editor window closed");
-                            api.prevent_exit();
-                        }
                     }
                 }
                 _ => {}
@@ -696,6 +861,15 @@ mod tests {
     }
 
     #[test]
+    fn write_markdown_file_persists_contents() {
+        let path = "/tmp/quill-write-markdown-test.md";
+        write_markdown_file(path.to_string(), "# saved\nbody".to_string()).expect("write file");
+        let content = std::fs::read_to_string(path).expect("read temp file");
+        assert_eq!(content, "# saved\nbody");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn normalize_recent_paths_deduplicates_and_trims() {
         let input = vec![
             " /tmp/one.md ".to_string(),
@@ -718,6 +892,28 @@ mod tests {
         assert_eq!(
             updated,
             vec!["/tmp/b.md".to_string(), "/tmp/a.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn build_window_url_includes_platform_query_for_empty_window() {
+        let url = build_window_url(&vec![]);
+        assert_eq!(
+            url.to_string(),
+            format!("index.html?platform={}", runtime_platform_name())
+        );
+    }
+
+    #[test]
+    fn build_window_url_includes_platform_and_open_path() {
+        let files = vec![PathBuf::from("/tmp/hello world.md")];
+        let url = build_window_url(&files);
+        assert_eq!(
+            url.to_string(),
+            format!(
+                "index.html?platform={}&open=%2Ftmp%2Fhello+world.md",
+                runtime_platform_name()
+            )
         );
     }
 }

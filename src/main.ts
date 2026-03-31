@@ -1,11 +1,18 @@
 import { Editor, Extension } from '@tiptap/core'
-import StarterKit from '@tiptap/starter-kit'
-import { Markdown } from '@tiptap/markdown'
-import Placeholder from '@tiptap/extension-placeholder'
-import Typography from '@tiptap/extension-typography'
-import { Mathematics } from '@tiptap/extension-mathematics'
+import { DOMSerializer } from '@tiptap/pm/model'
 import { getMarkdownFromEditor, setMarkdownInEditor } from './editor-markdown'
+import { buildExtensions as buildEditorExtensions } from './editor-extensions'
+import { applyMathEdit, getEditorMenuMode, shouldLazyLoadEditorMenus } from './editor-ui'
+import { getFindShortcutMode, shouldCloseFindBarFromDocumentClick } from './find-bar'
+import {
+  buildImageAssetFilename,
+  getImageAssetDirectory,
+  getImageMarkdownPath,
+} from './image-file-storage'
+import { applyImageInsert } from './image-support'
+import { getShortcutAction } from './keyboard-shortcuts'
 import { getMarkdownPasteContent } from './markdown-paste'
+import { getPlatformClassName, resolveAppPlatform, type AppPlatform } from './platform'
 import { openFirstWorkingStartupFile, selectStartupFiles } from './startup-files'
 
 // State
@@ -18,66 +25,61 @@ let suppressEditorUpdateSideEffects = false
 let dialogApiPromise: Promise<typeof import('@tauri-apps/plugin-dialog')> | null = null
 let fsApiPromise: Promise<typeof import('@tauri-apps/plugin-fs')> | null = null
 let coreApiPromise: Promise<typeof import('@tauri-apps/api/core')> | null = null
+let pathApiPromise: Promise<typeof import('@tauri-apps/api/path')> | null = null
 let windowApiPromise: Promise<typeof import('@tauri-apps/api/window')> | null = null
 let eventApiPromise: Promise<typeof import('@tauri-apps/api/event')> | null = null
 let mathMigrationModulePromise: Promise<typeof import('./math-migration')> | null = null
 let katexCssPromise: Promise<unknown> | null = null
+let lastFindQuery = ''
+let codeBlockLowlightExtension: any | null = null
+let uiMenuExtensions: {
+  bubbleMenu: Extension
+  floatingMenu: Extension
+} | null = null
+let uiMenusLoadPromise: Promise<void> | null = null
+let bubbleMenuEl: HTMLElement | null = null
+let floatingMenuEl: HTMLElement | null = null
+let insertMenuOpen = false
+let floatingMenuMode: 'hidden' | 'insert' | 'table' = 'hidden'
+let findBarEl: HTMLElement | null = null
+let findInputEl: HTMLInputElement | null = null
+let appPlatform: AppPlatform = 'unknown'
 
 // DOM Elements
 let filenameEl: HTMLElement
 let modifiedIndicator: HTMLElement
 
-// Shared KaTeX config
-const katexMacros = {
-  '\\R': '\\mathbb{R}',
-  '\\N': '\\mathbb{N}',
-  '\\Z': '\\mathbb{Z}',
-  '\\Q': '\\mathbb{Q}',
-  '\\C': '\\mathbb{C}',
-}
-
-// Build extensions with optional code highlighting
-function buildExtensions(codeBlockLowlight?: any) {
-  const extensions = [
-    StarterKit.configure({
-      codeBlock: codeBlockLowlight ? false : undefined,
-    }),
-    Markdown,
-    Placeholder.configure({
-      placeholder: 'Start writing...',
-    }),
-    Typography,
-    Mathematics.configure({
-      inlineOptions: {
-        onClick: (node: any, pos: number) => {
-          const latex = prompt('Edit LaTeX:', node.attrs.latex)
-          if (latex !== null && latex !== '') {
-            editor.chain().setNodeSelection(pos).updateInlineMath({ latex }).focus().run()
-          }
+// Build extensions with optional lazy-loaded extensions
+function buildExtensions() {
+  return buildEditorExtensions({
+    codeBlockLowlightExtension,
+    uiMenuExtensions,
+    onInlineMathClick: (node: any, pos: number) => {
+      const latex = prompt('Edit LaTeX:', node.attrs.latex)
+      applyMathEdit(
+        {
+          updateInlineMath: ({ latex, pos }) => editor.commands.updateInlineMath({ latex, pos }),
+          updateBlockMath: ({ latex, pos }) => editor.commands.updateBlockMath({ latex, pos }),
         },
-      },
-      blockOptions: {
-        onClick: (node: any, pos: number) => {
-          const latex = prompt('Edit LaTeX:', node.attrs.latex)
-          if (latex !== null && latex !== '') {
-            editor.chain().setNodeSelection(pos).updateBlockMath({ latex }).focus().run()
-          }
+        'inline',
+        latex,
+        pos,
+      )
+    },
+    onBlockMathClick: (node: any, pos: number) => {
+      const latex = prompt('Edit LaTeX:', node.attrs.latex)
+      applyMathEdit(
+        {
+          updateInlineMath: ({ latex, pos }) => editor.commands.updateInlineMath({ latex, pos }),
+          updateBlockMath: ({ latex, pos }) => editor.commands.updateBlockMath({ latex, pos }),
         },
-      },
-      katexOptions: {
-        throwOnError: false,
-        macros: katexMacros,
-      },
-    }),
-    CodeBlockTrigger,
-    KatexCssTrigger,
-  ]
-
-  if (codeBlockLowlight) {
-    extensions.splice(1, 0, codeBlockLowlight)
-  }
-
-  return extensions
+        'block',
+        latex,
+        pos,
+      )
+    },
+    extraExtensions: [CodeBlockTrigger, KatexCssTrigger],
+  })
 }
 
 // Debounce utility
@@ -149,52 +151,505 @@ const debouncedMigrateMath = debounce(() => {
   }
 }, 300)
 
-// Initialize editor
-function createEditor(content: any = '') {
-  editor = new Editor({
+type ClipboardPayload = {
+  markdown: string
+  html: string
+}
+
+function asTopLevelMarkdownContent(state: Editor['state'], content: any[]): any[] {
+  if (content.length === 0) {
+    return content
+  }
+
+  const hasBlockNode = content.some((node) => {
+    const nodeTypeName = typeof node?.type === 'string' ? node.type : ''
+    return Boolean(state.schema.nodes[nodeTypeName]?.isBlock)
+  })
+
+  if (hasBlockNode) {
+    return content
+  }
+
+  return [
+    {
+      type: 'paragraph',
+      content,
+    },
+  ]
+}
+
+function getSelectionClipboardPayload(currentEditor: Editor): ClipboardPayload | null {
+  const { state } = currentEditor
+  const { from, to, empty } = state.selection
+
+  if (empty || from === to) {
+    return null
+  }
+
+  const fragment = state.doc.slice(from, to).content
+  const markdownManager = (currentEditor as any).markdown
+  let markdown = ''
+
+  if (typeof markdownManager?.serialize === 'function') {
+    try {
+      const selectionJson = fragment.toJSON()
+      const topLevelContent = Array.isArray(selectionJson) ? selectionJson : [selectionJson]
+      markdown = markdownManager.serialize({
+        type: 'doc',
+        content: asTopLevelMarkdownContent(state, topLevelContent),
+      })
+    } catch {
+      markdown = ''
+    }
+  }
+
+  if (!markdown.trim()) {
+    markdown = state.doc.textBetween(from, to, '\n\n')
+  }
+
+  if (!markdown.trim()) {
+    return null
+  }
+
+  const serializer = DOMSerializer.fromSchema(state.schema)
+  const container = document.createElement('div')
+  container.appendChild(serializer.serializeFragment(fragment))
+
+  return {
+    markdown,
+    html: container.innerHTML,
+  }
+}
+
+function buildEditorProps() {
+  return {
+    attributes: {
+      class: 'tiptap',
+    },
+    handlePaste: (_view: any, event: ClipboardEvent) => {
+      if (editor.state.selection.$from.parent.type.spec.code) {
+        return false
+      }
+
+      const imageFiles = getImageFilesFromDataTransfer(event.clipboardData)
+      if (imageFiles.length > 0) {
+        event.preventDefault()
+        void insertImageFiles(imageFiles)
+        return true
+      }
+
+      const markdown = getMarkdownPasteContent(event)
+      if (!markdown) {
+        return false
+      }
+
+      return editor.commands.insertContent(markdown, { contentType: 'markdown' })
+    },
+    handleDrop: (view: any, event: DragEvent, _slice: any, moved: boolean) => {
+      if (moved) {
+        return false
+      }
+
+      const imageFiles = getImageFilesFromDataTransfer(event.dataTransfer)
+      if (imageFiles.length === 0) {
+        return false
+      }
+
+      const coords = view.posAtCoords({
+        left: event.clientX,
+        top: event.clientY,
+      })
+      if (coords?.pos != null) {
+        editor.commands.setTextSelection(coords.pos)
+      }
+
+      event.preventDefault()
+      void insertImageFiles(imageFiles)
+      return true
+    },
+    handleDOMEvents: {
+      copy: (_view: any, event: Event) => {
+        const clipboardEvent = event as ClipboardEvent
+        const data = clipboardEvent.clipboardData
+        if (!data) {
+          return false
+        }
+
+        const payload = getSelectionClipboardPayload(editor)
+        if (!payload) {
+          return false
+        }
+
+        data.setData('text/plain', payload.markdown)
+        data.setData('text/markdown', payload.markdown)
+        data.setData('text/x-markdown', payload.markdown)
+        data.setData('text/html', payload.html)
+        clipboardEvent.preventDefault()
+        return true
+      },
+    },
+  }
+}
+
+function shouldLoadMenusForEditor(currentEditor: Editor): boolean {
+  const { selection } = currentEditor.state
+  return shouldLazyLoadEditorMenus({
+    hasSelectionRange: !selection.empty && selection.from !== selection.to,
+    isInParagraph: selection.$from.parent.type.name === 'paragraph',
+    parentText: selection.$from.parent.textContent,
+    isInTable:
+      currentEditor.isActive('table')
+      || currentEditor.isActive('tableCell')
+      || currentEditor.isActive('tableHeader'),
+  })
+}
+
+function closeInsertMenu() {
+  insertMenuOpen = false
+  floatingMenuEl?.classList.remove('insert-menu-open')
+}
+
+function getFloatingMenuMode(currentEditor: Editor): 'hidden' | 'insert' | 'table' {
+  const { selection } = currentEditor.state
+  return getEditorMenuMode({
+    hasSelectionRange: !selection.empty && selection.from !== selection.to,
+    isInParagraph: selection.$from.parent.type.name === 'paragraph',
+    parentText: selection.$from.parent.textContent,
+    isInTable:
+      currentEditor.isActive('table')
+      || currentEditor.isActive('tableCell')
+      || currentEditor.isActive('tableHeader'),
+  })
+}
+
+function syncFloatingMenuMode(currentEditor: Editor) {
+  floatingMenuMode = getFloatingMenuMode(currentEditor)
+  if (!floatingMenuEl) {
+    return
+  }
+
+  floatingMenuEl.dataset.mode = floatingMenuMode
+  if (floatingMenuMode !== 'insert') {
+    closeInsertMenu()
+  }
+}
+
+function ensureFindBar() {
+  if (findBarEl && findInputEl) {
+    return
+  }
+
+  findBarEl = document.createElement('div')
+  findBarEl.className = 'find-bar hidden'
+  findBarEl.innerHTML = `
+    <input type="text" class="find-input" placeholder="Find in document" />
+    <button type="button" data-find-action="prev" title="Previous match">Prev</button>
+    <button type="button" data-find-action="next" title="Next match">Next</button>
+    <button type="button" data-find-action="close" title="Close find">Close</button>
+  `
+  document.body.appendChild(findBarEl)
+
+  findInputEl = findBarEl.querySelector<HTMLInputElement>('.find-input')
+  const maybeFind = (window as Window & {
+    find?: (
+      query: string,
+      caseSensitive?: boolean,
+      backwards?: boolean,
+      wrapAround?: boolean,
+      wholeWord?: boolean,
+      searchInFrames?: boolean,
+      showDialog?: boolean
+    ) => boolean
+  }).find
+
+  const runFind = (backwards: boolean) => {
+    const query = findInputEl?.value.trim() ?? ''
+    if (!query || typeof maybeFind !== 'function') {
+      return
+    }
+    lastFindQuery = query
+    maybeFind(query, false, backwards, true, false, false, false)
+  }
+
+  findInputEl?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      runFind(event.shiftKey)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeFindBar()
+    }
+  })
+
+  findBarEl.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('button[data-find-action]')
+    if (!button) {
+      return
+    }
+    const action = button.dataset.findAction
+    if (action === 'prev') {
+      runFind(true)
+    } else if (action === 'next') {
+      runFind(false)
+    } else if (action === 'close') {
+      closeFindBar()
+    }
+  })
+
+  document.addEventListener('mousedown', (event) => {
+    const target = event.target as Node | null
+    const isOpen = Boolean(findBarEl && !findBarEl.classList.contains('hidden'))
+    const clickedInsideFindBar = Boolean(target && findBarEl?.contains(target))
+    if (!shouldCloseFindBarFromDocumentClick({ isOpen, clickedInsideFindBar })) {
+      return
+    }
+    closeFindBar()
+  })
+}
+
+function openFindBar() {
+  ensureFindBar()
+  if (!findBarEl || !findInputEl) {
+    return
+  }
+  const selection = window.getSelection()?.toString().trim() ?? ''
+  findBarEl.classList.remove('hidden')
+  findInputEl.value = selection || lastFindQuery
+  findInputEl.focus()
+  findInputEl.select()
+}
+
+function closeFindBar() {
+  findBarEl?.classList.add('hidden')
+  findInputEl?.blur()
+  editor.commands.focus()
+}
+
+function runInsertCommand(command: string) {
+  const chain = editor.chain().focus()
+  switch (command) {
+    case 'paragraph':
+      chain.setParagraph().run()
+      break
+    case 'heading-1':
+      chain.toggleHeading({ level: 1 }).run()
+      break
+    case 'heading-2':
+      chain.toggleHeading({ level: 2 }).run()
+      break
+    case 'bullet-list':
+      chain.toggleBulletList().run()
+      break
+    case 'ordered-list':
+      chain.toggleOrderedList().run()
+      break
+    case 'task-list':
+      chain.toggleTaskList().run()
+      break
+    case 'table':
+      chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+      break
+    case 'blockquote':
+      chain.toggleBlockquote().run()
+      break
+    case 'code-block':
+      chain.toggleCodeBlock().run()
+      break
+    case 'image': {
+      const src = window.prompt('Image URL or path:')
+      if (src == null) {
+        return
+      }
+      const alt = window.prompt('Alt text (optional):', '')
+      if (alt == null) {
+        return
+      }
+      const title = window.prompt('Title (optional):', '')
+      if (!applyImageInsert(editor.commands as any, { src, alt, title })) {
+        return
+      }
+      break
+    }
+    default:
+      return
+  }
+  closeInsertMenu()
+}
+
+function ensureMenuElements() {
+  if (!bubbleMenuEl) {
+    bubbleMenuEl = document.createElement('div')
+    bubbleMenuEl.id = 'bubble-menu'
+    bubbleMenuEl.className = 'editor-bubble-menu'
+    bubbleMenuEl.innerHTML = `
+      <button type="button" data-command="bold" title="Bold">B</button>
+      <button type="button" data-command="italic" title="Italic">I</button>
+      <button type="button" data-command="code" title="Code">{ }</button>
+      <button type="button" data-command="strike" title="Strikethrough">S</button>
+    `
+    bubbleMenuEl.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('button[data-command]')
+      if (!button) {
+        return
+      }
+      const command = button.dataset.command
+      if (!command) {
+        return
+      }
+
+      if (command === 'bold') {
+        editor.chain().focus().toggleBold().run()
+      } else if (command === 'italic') {
+        editor.chain().focus().toggleItalic().run()
+      } else if (command === 'code') {
+        editor.chain().focus().toggleCode().run()
+      } else if (command === 'strike') {
+        editor.chain().focus().toggleStrike().run()
+      }
+    })
+    document.body.appendChild(bubbleMenuEl)
+  }
+
+  if (!floatingMenuEl) {
+    floatingMenuEl = document.createElement('div')
+    floatingMenuEl.id = 'floating-menu'
+    floatingMenuEl.className = 'editor-floating-menu'
+    floatingMenuEl.innerHTML = `
+      <div class="floating-menu-panel floating-menu-panel-insert">
+        <button type="button" class="insert-toggle" data-command="toggle-insert" title="Insert block">+</button>
+        <div class="insert-menu-items">
+          <button type="button" data-command="paragraph">Text</button>
+          <button type="button" data-command="heading-1">Heading 1</button>
+          <button type="button" data-command="heading-2">Heading 2</button>
+          <button type="button" data-command="bullet-list">Bullet List</button>
+          <button type="button" data-command="ordered-list">Numbered List</button>
+          <button type="button" data-command="task-list">Task List</button>
+          <button type="button" data-command="table">Table</button>
+          <button type="button" data-command="blockquote">Quote</button>
+          <button type="button" data-command="code-block">Code Block</button>
+          <button type="button" data-command="image">Image</button>
+        </div>
+      </div>
+      <div class="floating-menu-panel floating-menu-panel-table">
+        <button type="button" data-table-command="addRowBefore" title="Add row above">Row +↑</button>
+        <button type="button" data-table-command="addRowAfter" title="Add row below">Row +↓</button>
+        <button type="button" data-table-command="deleteRow" title="Delete row">Row -</button>
+        <button type="button" data-table-command="addColumnBefore" title="Add column before">Col +←</button>
+        <button type="button" data-table-command="addColumnAfter" title="Add column after">Col +→</button>
+        <button type="button" data-table-command="deleteColumn" title="Delete column">Col -</button>
+        <button type="button" data-table-command="toggleHeaderRow" title="Toggle header row">Header Row</button>
+        <button type="button" data-table-command="toggleHeaderColumn" title="Toggle header column">Header Col</button>
+        <button type="button" data-table-command="mergeOrSplit" title="Merge or split selected cells">Merge/Split</button>
+        <button type="button" data-table-command="deleteTable" title="Delete table">Delete Table</button>
+      </div>
+    `
+    floatingMenuEl.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('button[data-command]')
+      if (button) {
+        const command = button.dataset.command
+        if (!command) {
+          return
+        }
+        if (command === 'toggle-insert') {
+          insertMenuOpen = !insertMenuOpen
+          floatingMenuEl?.classList.toggle('insert-menu-open', insertMenuOpen)
+          return
+        }
+        runInsertCommand(command)
+        return
+      }
+
+      const tableButton = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('button[data-table-command]')
+      if (!tableButton) {
+        return
+      }
+      const tableCommand = tableButton.dataset.tableCommand
+      if (!tableCommand) {
+        return
+      }
+      ;(editor.chain().focus() as any)[tableCommand]().run()
+    })
+    document.body.appendChild(floatingMenuEl)
+    syncFloatingMenuMode(editor)
+
+    document.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement | null
+      if (!target || !floatingMenuEl || !insertMenuOpen) {
+        return
+      }
+      if (floatingMenuEl.contains(target)) {
+        return
+      }
+      closeInsertMenu()
+    })
+  }
+}
+
+function buildEditorConfig(content: any) {
+  return {
     element: document.getElementById('editor')!,
     extensions: buildExtensions(),
     content,
     autofocus: true,
-    editorProps: {
-      attributes: {
-        class: 'tiptap',
-      },
-      handlePaste: (_view, event) => {
-        if (editor.state.selection.$from.parent.type.spec.code) {
-          return false
-        }
-
-        const markdown = getMarkdownPasteContent(event)
-        if (!markdown) {
-          return false
-        }
-
-        return editor.commands.insertContent(markdown, { contentType: 'markdown' })
-      },
-    },
-    onCreate: ({ editor: currentEditor }) => {
-      // Avoid math migration work for empty/non-math startup docs.
+    editorProps: buildEditorProps(),
+    onCreate: ({ editor: currentEditor }: { editor: Editor }) => {
       if (currentEditor.getText().includes('$')) {
         void loadKatexCss()
         void migrateAllMathInEditor(currentEditor)
       }
     },
-    onUpdate: ({ transaction }) => {
+    onUpdate: ({ transaction }: { transaction: any }) => {
       if (suppressEditorUpdateSideEffects) {
         return
       }
-      // Guard to avoid redundant DOM updates
       if (!isModified) {
         setModified(true)
       }
-      // Only run expensive math migration when this update introduced math syntax.
-      if (shouldRunMathMigrationForTransaction(transaction as any)) {
+      if (shouldRunMathMigrationForTransaction(transaction)) {
         debouncedMigrateMath()
       }
     },
-  })
+    onSelectionUpdate: ({ editor: currentEditor }: { editor: Editor }) => {
+      if (!uiMenuExtensions && !uiMenusLoadPromise && shouldLoadMenusForEditor(currentEditor)) {
+        void loadEditorMenus()
+      }
+      syncFloatingMenuMode(currentEditor)
+      if (!shouldLoadMenusForEditor(currentEditor)) {
+        closeInsertMenu()
+      }
+    },
+  }
+}
 
+function recreateEditorWithSnapshot(snapshot: any, from: number, to: number) {
+  editor.destroy()
+  editor = new Editor(buildEditorConfig(snapshot))
+  try {
+    editor.commands.focus()
+    const maxPos = editor.state.doc.content.size
+    const safeFrom = Math.min(from, maxPos)
+    const safeTo = Math.min(to, maxPos)
+    if (safeFrom === safeTo) {
+      editor.commands.setTextSelection(safeFrom)
+    } else {
+      editor.commands.setTextSelection({ from: safeFrom, to: safeTo })
+    }
+  } catch {
+    // Ignore cursor restore errors
+  }
+}
+
+function recreateEditorPreservingState() {
+  const snapshot = editor.getJSON()
+  const { from, to } = editor.state.selection
+  recreateEditorWithSnapshot(snapshot, from, to)
+}
+
+// Initialize editor
+function createEditor(content: any = '') {
+  editor = new Editor(buildEditorConfig(content))
   return editor
 }
 
@@ -246,59 +701,77 @@ async function loadCodeHighlighting(): Promise<void> {
 
     const lowlight = createLowlight(common)
 
-    // Capture content AFTER imports complete to avoid losing edits during await
-    const snapshot = editor.getJSON()
-    const { from } = editor.state.selection
-
-    editor.destroy()
-
-    const codeBlockExt = CodeBlockLowlight.configure({
+    codeBlockLowlightExtension = CodeBlockLowlight.configure({
       lowlight,
       defaultLanguage: 'plaintext',
     })
-
-    editor = new Editor({
-      element: document.getElementById('editor')!,
-      extensions: buildExtensions(codeBlockExt),
-      content: snapshot, // Use JSON to preserve structure
-      autofocus: true,
-      editorProps: {
-        attributes: {
-          class: 'tiptap',
-        },
-      },
-      onCreate: ({ editor: currentEditor }) => {
-        if (currentEditor.getText().includes('$')) {
-          void loadKatexCss()
-          void migrateAllMathInEditor(currentEditor)
-        }
-      },
-      onUpdate: ({ transaction }) => {
-        if (suppressEditorUpdateSideEffects) {
-          return
-        }
-        if (!isModified) {
-          setModified(true)
-        }
-        if (shouldRunMathMigrationForTransaction(transaction as any)) {
-          debouncedMigrateMath()
-        }
-      },
-    })
-
-    // Try to restore cursor position
-    try {
-      editor.commands.focus()
-      editor.commands.setTextSelection(Math.min(from, editor.state.doc.content.size))
-    } catch {
-      // Ignore cursor restore errors
-    }
+    recreateEditorPreservingState()
 
     console.log('Code highlighting loaded')
   } catch (e) {
     console.error('Failed to load code highlighting:', e)
     codeHighlightingLoaded = false
+    codeBlockLowlightExtension = null
   }
+}
+
+async function loadEditorMenus(): Promise<void> {
+  if (uiMenuExtensions) {
+    return
+  }
+  if (uiMenusLoadPromise) {
+    return uiMenusLoadPromise
+  }
+
+  uiMenusLoadPromise = (async () => {
+    try {
+      const [{ BubbleMenu }, { FloatingMenu }] = await Promise.all([
+        import('@tiptap/extension-bubble-menu'),
+        import('@tiptap/extension-floating-menu'),
+      ])
+
+      ensureMenuElements()
+
+      if (!bubbleMenuEl || !floatingMenuEl) {
+        return
+      }
+
+      const bubbleMenu = BubbleMenu.configure({
+        element: bubbleMenuEl,
+        shouldShow: ({ editor, from, to }: { editor: Editor; from: number; to: number }) => {
+          if (!editor.isEditable) {
+            return false
+          }
+          return from !== to
+        },
+      })
+
+      const floatingMenu = FloatingMenu.configure({
+        element: floatingMenuEl,
+        shouldShow: ({ editor }: { editor: Editor }) => {
+          if (!editor.isEditable) {
+            return false
+          }
+          const mode = getFloatingMenuMode(editor)
+          return mode === 'table' || (mode === 'insert' && editor.state.selection.empty)
+        },
+      })
+
+      uiMenuExtensions = {
+        bubbleMenu,
+        floatingMenu,
+      }
+
+      recreateEditorPreservingState()
+      console.log('Formatting and block insert menus loaded')
+    } catch (e) {
+      console.error('Failed to load editor menus:', e)
+    } finally {
+      uiMenusLoadPromise = null
+    }
+  })()
+
+  return uiMenusLoadPromise
 }
 
 // Check if content has code blocks and load highlighting if needed
@@ -318,6 +791,21 @@ async function ensureKatexCssForContent(content: string): Promise<void> {
 function setModified(modified: boolean) {
   isModified = modified
   modifiedIndicator.classList.toggle('hidden', !modified)
+
+  if ((window as any).__TAURI_INTERNALS__) {
+    void (async () => {
+      try {
+        const { invoke } = await getCoreApi()
+        const { getCurrentWindow } = await getWindowApi()
+        await invoke('set_window_modified', {
+          label: getCurrentWindow().label,
+          modified,
+        })
+      } catch (e) {
+        console.warn('Failed to sync modified state:', e)
+      }
+    })()
+  }
 }
 
 function setFilename(name: string) {
@@ -363,6 +851,13 @@ function getCoreApi() {
   return coreApiPromise
 }
 
+function getPathApi() {
+  if (!pathApiPromise) {
+    pathApiPromise = import('@tauri-apps/api/path')
+  }
+  return pathApiPromise
+}
+
 function getWindowApi() {
   if (!windowApiPromise) {
     windowApiPromise = import('@tauri-apps/api/window')
@@ -393,7 +888,7 @@ async function showCurrentWindow(): Promise<void> {
 
 function setupTitlebarDragging() {
   const titlebarEl = document.getElementById('titlebar')
-  if (!titlebarEl || !(window as any).__TAURI_INTERNALS__) {
+  if (!titlebarEl || !(window as any).__TAURI_INTERNALS__ || appPlatform !== 'macos') {
     return
   }
 
@@ -419,6 +914,14 @@ function setupTitlebarDragging() {
 }
 
 function setupMenuEventListeners() {
+  window.addEventListener('quill:menu-find', () => {
+    openFindBar()
+  })
+
+  window.addEventListener('quill:menu-print', () => {
+    window.print()
+  })
+
   if (!(window as any).__TAURI_INTERNALS__) {
     return
   }
@@ -427,19 +930,18 @@ function setupMenuEventListeners() {
     try {
       const { listen } = await getEventApi()
       await listen('quill://menu-new', () => {
-        if (!document.hasFocus()) return
         void newFile()
       })
       await listen('quill://menu-open', () => {
-        if (!document.hasFocus()) return
         void openFile()
       })
       await listen('quill://menu-save', () => {
-        if (!document.hasFocus()) return
         void saveFile()
       })
+      await listen('quill://menu-print', () => {
+        window.print()
+      })
       await listen<string>('quill://menu-open-path', (event) => {
-        if (!document.hasFocus()) return
         const filePath = event.payload?.trim()
         if (filePath) {
           void openFilePath(filePath)
@@ -489,27 +991,90 @@ async function confirmDiscardChanges(): Promise<boolean> {
 
 // Keyboard shortcuts
 function setupKeyboardShortcuts() {
-  document.addEventListener('keydown', async (e) => {
-    const isMod = e.metaKey || e.ctrlKey
+  const findInPage = (query: string, backwards: boolean) => {
+    const maybeFind = (window as Window & {
+      find?: (
+        query: string,
+        caseSensitive?: boolean,
+        backwards?: boolean,
+        wrapAround?: boolean,
+        wholeWord?: boolean,
+        searchInFrames?: boolean,
+        showDialog?: boolean
+      ) => boolean
+    }).find
+    if (typeof maybeFind === 'function') {
+      maybeFind(query, false, backwards, true, false, false, false)
+    }
+  }
 
-    // Cmd+S - Save
-    if (isMod && e.key === 's') {
-      e.preventDefault()
+  const handleShortcut = async (e: KeyboardEvent) => {
+    const action = getShortcutAction(e, lastFindQuery)
+    if (!action) {
+      return
+    }
+
+    e.preventDefault()
+    e.stopPropagation()
+
+    if (action === 'save') {
       await saveFile()
+      return
     }
 
-    // Cmd+O - Open
-    if (isMod && e.key === 'o') {
-      e.preventDefault()
+    if (action === 'open') {
       await openFile()
+      return
     }
 
-    // Cmd+N - New
-    if (isMod && e.key === 'n') {
-      e.preventDefault()
+    if (action === 'new') {
       await newFile()
+      return
     }
-  })
+
+    if (action === 'find') {
+      const mode = getFindShortcutMode(Boolean(findBarEl && !findBarEl.classList.contains('hidden')))
+      if (mode === 'close') {
+        closeFindBar()
+      } else {
+        openFindBar()
+      }
+      return
+    }
+
+    if (action === 'print') {
+      window.print()
+      return
+    }
+
+    if (action === 'findNext') {
+      findInPage(lastFindQuery, false)
+      return
+    }
+
+    if (action === 'findPrevious') {
+      findInPage(lastFindQuery, true)
+      return
+    }
+
+    if (action === 'closeWindow') {
+      if ((window as any).__TAURI_INTERNALS__) {
+        try {
+          const { getCurrentWindow } = await getWindowApi()
+          await getCurrentWindow().close()
+        } catch (err) {
+          console.error('Failed to close window via shortcut:', err)
+        }
+        return
+      }
+
+      window.close()
+    }
+  }
+
+  window.addEventListener('keydown', (e) => {
+    void handleShortcut(e)
+  }, { capture: true })
 }
 
 // Get markdown content from editor
@@ -536,10 +1101,11 @@ function applyExternalMarkdownContent(markdown: string): void {
 }
 
 // File operations (Tauri)
-async function saveFile() {
+async function saveFile(): Promise<string | null> {
   try {
     const { save } = await getDialogApi()
     const { writeTextFile } = await getFsApi()
+    const { invoke } = await getCoreApi()
 
     const markdown = getMarkdownContent()
 
@@ -550,7 +1116,12 @@ async function saveFile() {
     })
 
     if (targetPath) {
-      await writeTextFile(targetPath, markdown)
+      try {
+        await writeTextFile(targetPath, markdown)
+      } catch (pluginWriteError) {
+        await invoke('write_markdown_file', { path: targetPath, content: markdown })
+        console.warn('Fell back to native file write for:', targetPath, pluginWriteError)
+      }
       currentFilePath = targetPath
       setFilename(getBasename(targetPath))
       setModified(false)
@@ -558,7 +1129,22 @@ async function saveFile() {
     }
   } catch (e) {
     console.error('Save failed:', e)
+    try {
+      const { message } = await getDialogApi()
+      await message(`Quill could not save this document.\n\n${String(e)}`, {
+        title: 'Save Failed',
+        kind: 'error',
+      })
+    } catch {
+      window.alert(`Quill could not save this document.\n\n${String(e)}`)
+    }
   }
+
+  return currentFilePath
+}
+
+function setupCloseWarning() {
+  // Native close handling lives in Rust so red-close, Cmd+W, and menu close all share one path.
 }
 
 async function openFile() {
@@ -644,6 +1230,91 @@ async function openFilePath(filePath: string): Promise<boolean> {
   }
 }
 
+function getImageFilesFromDataTransfer(dataTransfer: DataTransfer | null): File[] {
+  if (!dataTransfer) {
+    return []
+  }
+
+  const itemFiles: File[] = []
+  if (dataTransfer.items) {
+    for (const item of Array.from(dataTransfer.items)) {
+      if (item.kind !== 'file' || !item.type.startsWith('image/')) {
+        continue
+      }
+
+      const file = item.getAsFile()
+      if (file) {
+        itemFiles.push(file)
+      }
+    }
+  }
+
+  if (itemFiles.length > 0) {
+    return itemFiles
+  }
+
+  return Array.from(dataTransfer.files).filter((file) => file.type.startsWith('image/'))
+}
+
+async function ensureFilePathForImageImport(): Promise<string | null> {
+  if (currentFilePath) {
+    return currentFilePath
+  }
+
+  const savedPath = await saveFile()
+  return savedPath ?? currentFilePath
+}
+
+async function writeImageAssetForCurrentDocument(file: File): Promise<string | null> {
+  const markdownFilePath = await ensureFilePathForImageImport()
+  if (!markdownFilePath) {
+    return null
+  }
+
+  const { mkdir, exists, writeFile } = await getFsApi()
+  const { join } = await getPathApi()
+
+  const assetDirectory = getImageAssetDirectory(markdownFilePath)
+  await mkdir(assetDirectory, { recursive: true })
+
+  let duplicateIndex = 0
+  while (true) {
+    const assetFilename = buildImageAssetFilename({
+      originalName: file.name,
+      mimeType: file.type,
+      duplicateIndex,
+    })
+    const assetFilePath = await join(assetDirectory, assetFilename)
+    if (await exists(assetFilePath)) {
+      duplicateIndex += 1
+      continue
+    }
+
+    const data = new Uint8Array(await file.arrayBuffer())
+    await writeFile(assetFilePath, data)
+    return getImageMarkdownPath(markdownFilePath, assetFilePath)
+  }
+}
+
+async function insertImageFiles(files: File[]): Promise<void> {
+  for (const file of files) {
+    try {
+      const src = await writeImageAssetForCurrentDocument(file)
+      if (!src) {
+        return
+      }
+
+      applyImageInsert(editor.commands as any, {
+        src,
+        alt: null,
+        title: file.name || null,
+      })
+    } catch (error) {
+      console.error('Failed to insert image file:', error)
+    }
+  }
+}
+
 // Declare global for TypeScript
 declare global {
   interface Window {
@@ -670,6 +1341,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     return
   }
 
+  appPlatform = resolveAppPlatform({
+    href: window.location.href,
+    userAgent: navigator.userAgent,
+    navigatorPlatform: navigator.platform,
+  })
+
+  const appRoot = document.getElementById('app')
+  appRoot?.classList.add(getPlatformClassName(appPlatform))
+
   // Initialize DOM element references
   filenameEl = document.getElementById('filename')!
   modifiedIndicator = document.getElementById('modified-indicator')!
@@ -679,6 +1359,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   logPerf('createEditor', tCreateEditorStart)
   setupKeyboardShortcuts()
   setupMenuEventListeners()
+  setupCloseWarning()
   setupTitlebarDragging()
   setFilename('untitled.md')
 
