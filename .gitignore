@@ -25,3 +25,6 @@ dist-ssr
 
 # Test/benchmark files
 tmp-test-files/
+
+# Test harness artifacts
+harness/shots/

@@ -1,462 +1,234 @@
-import { Editor, Extension } from '@tiptap/core'
-import StarterKit from '@tiptap/starter-kit'
-import { Markdown } from '@tiptap/markdown'
-import Placeholder from '@tiptap/extension-placeholder'
-import Typography from '@tiptap/extension-typography'
-import { Mathematics } from '@tiptap/extension-mathematics'
-import { getMarkdownFromEditor, setMarkdownInEditor } from './editor-markdown'
-import { migrateAllMathStrings, shouldRunMathMigrationForTransaction } from './math-migration'
+import type { Editor } from '@tiptap/core'
+import { TextSelection } from '@tiptap/pm/state'
+import { createQuillEditor, ensureGrammarsForDoc, getMarkdown, setMarkdown } from './editor-setup'
+import { FileOps } from './file-ops'
 import { selectStartupFiles } from './startup-files'
+import { BubbleMenu } from './ui/bubble-menu'
+import { LinkPopover } from './ui/link-popover'
+import { MathPopover } from './ui/math-popover'
+import { SlashMenu } from './ui/slash-menu'
+import { FindBar } from './ui/find-bar'
+import { elementAnchor } from './ui/popover'
+import { showToast } from './ui/toast'
 
-// Load KaTeX CSS immediately
 import 'katex/dist/katex.min.css'
 
-// State
-let editor: Editor
-let isModified = false
-let currentFilename = 'untitled.md'
-let currentFilePath: string | null = null
-let codeHighlightingLoaded = false
-
-// DOM Elements
-let filenameEl: HTMLElement
-let modifiedIndicator: HTMLElement
-
-// Shared KaTeX config
-const katexMacros = {
-  '\\R': '\\mathbb{R}',
-  '\\N': '\\mathbb{N}',
-  '\\Z': '\\mathbb{Z}',
-  '\\Q': '\\mathbb{Q}',
-  '\\C': '\\mathbb{C}',
-}
-
-// Build extensions with optional code highlighting
-function buildExtensions(codeBlockLowlight?: any) {
-  const extensions = [
-    StarterKit.configure({
-      codeBlock: codeBlockLowlight ? false : undefined,
-    }),
-    Markdown,
-    Placeholder.configure({
-      placeholder: 'Start writing...',
-    }),
-    Typography,
-    Mathematics.configure({
-      inlineOptions: {
-        onClick: (node: any, pos: number) => {
-          const latex = prompt('Edit LaTeX:', node.attrs.latex)
-          if (latex !== null && latex !== '') {
-            editor.chain().setNodeSelection(pos).updateInlineMath({ latex }).focus().run()
-          }
-        },
-      },
-      blockOptions: {
-        onClick: (node: any, pos: number) => {
-          const latex = prompt('Edit LaTeX:', node.attrs.latex)
-          if (latex !== null && latex !== '') {
-            editor.chain().setNodeSelection(pos).updateBlockMath({ latex }).focus().run()
-          }
-        },
-      },
-      katexOptions: {
-        throwOnError: false,
-        macros: katexMacros,
-      },
-    }),
-    CodeBlockTrigger,
-  ]
-
-  if (codeBlockLowlight) {
-    extensions.splice(1, 0, codeBlockLowlight)
+declare global {
+  interface Window {
+    openedFiles?: string[]
+    quillDebug?: { editor: Editor; getMarkdown: () => string; setMarkdown: (md: string) => void }
   }
-
-  return extensions
-}
-
-// Debounce utility
-function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
-  let timeoutId: ReturnType<typeof setTimeout>
-  return ((...args: any[]) => {
-    clearTimeout(timeoutId)
-    timeoutId = setTimeout(() => fn(...args), ms)
-  }) as T
-}
-
-// Migrate math strings (debounced to avoid running on every keystroke)
-const debouncedMigrateMath = debounce(() => {
-  if (editor) {
-    migrateAllMathStrings(editor)
-  }
-}, 300)
-
-// Initialize editor
-function createEditor(content: any = '') {
-  editor = new Editor({
-    element: document.getElementById('editor')!,
-    extensions: buildExtensions(),
-    content,
-    autofocus: true,
-    editorProps: {
-      attributes: {
-        class: 'tiptap',
-      },
-    },
-    onCreate: ({ editor: currentEditor }) => {
-      // Migrate any existing $...$ patterns to math nodes
-      migrateAllMathStrings(currentEditor)
-    },
-    onUpdate: ({ transaction }) => {
-      // Guard to avoid redundant DOM updates
-      if (!isModified) {
-        setModified(true)
-      }
-      // Only run expensive math migration when this update introduced math syntax.
-      if (shouldRunMathMigrationForTransaction(transaction as any)) {
-        debouncedMigrateMath()
-      }
-    },
-  })
-
-  return editor
-}
-
-// Extension to detect code blocks and lazy-load highlighting
-const CodeBlockTrigger = Extension.create({
-  name: 'codeBlockTrigger',
-
-  addKeyboardShortcuts() {
-    return {
-      // Detect ``` for code blocks
-      '`': () => {
-        const { state } = this.editor
-        const { from } = state.selection
-        const textBefore = state.doc.textBetween(Math.max(0, from - 2), from)
-
-        if (textBefore === '``' && !codeHighlightingLoaded) {
-          loadCodeHighlighting()
-        }
-        return false
-      },
-    }
-  },
-})
-
-// Lazy load code highlighting
-async function loadCodeHighlighting(): Promise<void> {
-  if (codeHighlightingLoaded) return
-  codeHighlightingLoaded = true
-
-  try {
-    // Load imports first
-    const [{ CodeBlockLowlight }, { common, createLowlight }] = await Promise.all([
-      import('@tiptap/extension-code-block-lowlight'),
-      import('lowlight'),
-    ])
-
-    const lowlight = createLowlight(common)
-
-    // Capture content AFTER imports complete to avoid losing edits during await
-    const snapshot = editor.getJSON()
-    const { from } = editor.state.selection
-
-    editor.destroy()
-
-    const codeBlockExt = CodeBlockLowlight.configure({
-      lowlight,
-      defaultLanguage: 'plaintext',
-    })
-
-    editor = new Editor({
-      element: document.getElementById('editor')!,
-      extensions: buildExtensions(codeBlockExt),
-      content: snapshot, // Use JSON to preserve structure
-      autofocus: true,
-      editorProps: {
-        attributes: {
-          class: 'tiptap',
-        },
-      },
-      onCreate: ({ editor: currentEditor }) => {
-        migrateAllMathStrings(currentEditor)
-      },
-      onUpdate: ({ transaction }) => {
-        if (!isModified) {
-          setModified(true)
-        }
-        if (shouldRunMathMigrationForTransaction(transaction as any)) {
-          debouncedMigrateMath()
-        }
-      },
-    })
-
-    // Try to restore cursor position
-    try {
-      editor.commands.focus()
-      editor.commands.setTextSelection(Math.min(from, editor.state.doc.content.size))
-    } catch {
-      // Ignore cursor restore errors
-    }
-
-    console.log('Code highlighting loaded')
-  } catch (e) {
-    console.error('Failed to load code highlighting:', e)
-    codeHighlightingLoaded = false
-  }
-}
-
-// Check if content has code blocks and load highlighting if needed
-async function ensureCodeHighlightingForContent(content: string): Promise<void> {
-  if (!codeHighlightingLoaded && content.includes('```')) {
-    await loadCodeHighlighting()
-  }
-}
-
-// UI State
-function setModified(modified: boolean) {
-  isModified = modified
-  modifiedIndicator.classList.toggle('hidden', !modified)
-}
-
-function setFilename(name: string) {
-  currentFilename = name
-  filenameEl.textContent = name
-  document.title = `${name} - Quill`
-}
-
-function nowMs(): number {
-  return performance.now()
 }
 
 function logPerf(label: string, startMs: number): void {
   if (import.meta.env.DEV) {
-    console.log(`[perf] ${label}: ${(nowMs() - startMs).toFixed(1)}ms`)
+    console.log(`[perf] ${label}: ${(performance.now() - startMs).toFixed(1)}ms`)
+  }
+}
+
+async function openUrlExternally(url: string): Promise<void> {
+  try {
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    await openUrl(url)
+  } catch (e) {
+    console.error('Failed to open URL:', e)
+    showToast(`Couldn't open link: ${e}`, { kind: 'error' })
   }
 }
 
 async function showCurrentWindow(): Promise<void> {
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window')
-    await getCurrentWindow().show()
+    const win = getCurrentWindow()
+    await win.show()
+    // Programmatically-shown windows don't take keyboard focus on their own.
+    await win.setFocus()
   } catch (e) {
     console.error('Failed to show window:', e)
   }
 }
 
-// Extract filename from path (cross-platform)
-function getBasename(filePath: string): string {
-  // Handle both Unix and Windows paths
-  const parts = filePath.split(/[/\\]/)
-  return parts[parts.length - 1] || 'untitled.md'
-}
-
-// Confirm discarding unsaved changes
-async function confirmDiscardChanges(): Promise<boolean> {
-  if (!isModified) return true
-
+async function setNativeTitle(title: string): Promise<void> {
   try {
-    const { ask } = await import('@tauri-apps/plugin-dialog')
-    return await ask('You have unsaved changes. Discard them?', {
-      title: 'Unsaved Changes',
-      kind: 'warning',
-    })
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    await getCurrentWindow().setTitle(title)
   } catch {
-    // Fallback to browser confirm if Tauri dialog fails
-    return window.confirm('You have unsaved changes. Discard them?')
+    // Browser harness: no native window.
   }
 }
 
-// Keyboard shortcuts
-function setupKeyboardShortcuts() {
-  document.addEventListener('keydown', async (e) => {
-    const isMod = e.metaKey || e.ctrlKey
-
-    // Cmd+S - Save
-    if (isMod && e.key === 's') {
-      e.preventDefault()
-      await saveFile()
-    }
-
-    // Cmd+O - Open
-    if (isMod && e.key === 'o') {
-      e.preventDefault()
-      await openFile()
-    }
-
-    // Cmd+N - New
-    if (isMod && e.key === 'n') {
-      e.preventDefault()
-      await newFile()
-    }
-  })
-}
-
-// Get markdown content from editor
-function getMarkdownContent(): string {
-  return getMarkdownFromEditor(editor as any)
-}
-
-// Set markdown content in editor
-function setMarkdownContent(markdown: string): void {
-  setMarkdownInEditor(editor as any, markdown)
-}
-
-// File operations (Tauri)
-async function saveFile() {
-  try {
-    const { save } = await import('@tauri-apps/plugin-dialog')
-    const { writeTextFile } = await import('@tauri-apps/plugin-fs')
-
-    const markdown = getMarkdownContent()
-
-    // If we already have a file path, save directly
-    const targetPath = currentFilePath ?? await save({
-      defaultPath: currentFilename,
-      filters: [{ name: 'Markdown', extensions: ['md'] }],
-    })
-
-    if (targetPath) {
-      await writeTextFile(targetPath, markdown)
-      currentFilePath = targetPath
-      setFilename(getBasename(targetPath))
-      setModified(false)
-    }
-  } catch (e) {
-    console.error('Save failed:', e)
-  }
-}
-
-async function openFile() {
-  // Confirm before discarding unsaved changes
-  if (!await confirmDiscardChanges()) return
-
-  try {
-    const { open } = await import('@tauri-apps/plugin-dialog')
-    const { readTextFile } = await import('@tauri-apps/plugin-fs')
-
-    const filePath = await open({
-      filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }],
-    })
-
-    if (filePath && typeof filePath === 'string') {
-      const content = await readTextFile(filePath)
-
-      // Load code highlighting if content has code blocks
-      await ensureCodeHighlightingForContent(content)
-
-      // Set content using markdown API
-      setMarkdownContent(content)
-
-      currentFilePath = filePath
-      setFilename(getBasename(filePath))
-      setModified(false)
-    }
-  } catch (e) {
-    console.error('Open failed:', e)
-  }
-}
-
-async function newFile() {
-  // Confirm before discarding unsaved changes
-  if (!await confirmDiscardChanges()) return
-
-  editor.commands.clearContent()
-  currentFilePath = null
-  setFilename('untitled.md')
-  setModified(false)
-}
-
-// Open a file by path (used by file associations)
-async function openFilePath(filePath: string): Promise<boolean> {
-  const tOpenStart = nowMs()
-  try {
-    const tReadStart = nowMs()
-    let content: string
-    try {
-      const { readTextFile } = await import('@tauri-apps/plugin-fs')
-      content = await readTextFile(filePath)
-    } catch (pluginReadError) {
-      const { invoke } = await import('@tauri-apps/api/core')
-      content = await invoke<string>('read_markdown_file', { path: filePath })
-      console.warn('Fell back to native file read for:', filePath, pluginReadError)
-    }
-    logPerf(`openFilePath read (${getBasename(filePath)})`, tReadStart)
-
-    // Load code highlighting if needed
-    const tCodeStart = nowMs()
-    await ensureCodeHighlightingForContent(content)
-    logPerf(`openFilePath code-highlight check (${getBasename(filePath)})`, tCodeStart)
-
-    // Set content
-    const tSetContentStart = nowMs()
-    setMarkdownContent(content)
-    logPerf(`openFilePath set content (${getBasename(filePath)})`, tSetContentStart)
-
-    currentFilePath = filePath
-    setFilename(getBasename(filePath))
-    setModified(false)
-    logPerf(`openFilePath total (${getBasename(filePath)})`, tOpenStart)
-    return true
-  } catch (e) {
-    console.error('Failed to open file:', e)
-    logPerf(`openFilePath failed (${getBasename(filePath)})`, tOpenStart)
-    return false
-  }
-}
-
-// Declare global for TypeScript
-declare global {
-  interface Window {
-    openedFiles?: string[]
-  }
-}
-
-// Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-  const tStartupStart = nowMs()
-  console.log('DOMContentLoaded fired')
-  console.log('window.openedFiles =', window.openedFiles)
-  const parsedUrl = new URL(window.location.href)
-  const startupFileFromUrl = parsedUrl.searchParams.get('open')
-  const isKeepaliveWindow = parsedUrl.searchParams.get('keepalive') === '1'
+  const tStartup = performance.now()
+  const params = new URL(window.location.href).searchParams
+  if (params.get('keepalive') === '1') return
 
-  if (isKeepaliveWindow) {
-    if (import.meta.env.DEV) {
-      console.log('[perf] keepalive window booted')
-    }
-    return
+  const filenameEl = document.getElementById('filename')!
+  const modifiedIndicator = document.getElementById('modified-indicator')!
+  const wordCountEl = document.getElementById('word-count')!
+  const editorEl = document.getElementById('editor')!
+
+  // --- editor ---
+  let fileOps: FileOps
+  let linkPopover: LinkPopover
+  let mathPopover: MathPopover
+
+  const editor = createQuillEditor(editorEl, {
+    onDocChanged: () => {
+      fileOps.noteDocChanged()
+      scheduleWordCount()
+      scheduleGrammarCheck()
+    },
+    onLinkClick: anchor => linkPopover.showForLink(anchor),
+    onInlineMathClick: (node, pos) => {
+      const dom = editor.view.nodeDOM(pos) as HTMLElement | null
+      if (dom) mathPopover.show('inline', node.attrs.latex, pos, elementAnchor(dom))
+    },
+    onBlockMathClick: (node, pos) => {
+      const dom = editor.view.nodeDOM(pos) as HTMLElement | null
+      if (dom) mathPopover.show('block', node.attrs.latex, pos, elementAnchor(dom))
+    },
+    onOpenUrl: url => void openUrlExternally(url),
+  })
+  logPerf('createEditor', tStartup)
+
+  // --- UI state ---
+  function applyFileState(state: { filename: string; dirty: boolean }): void {
+    filenameEl.textContent = state.filename
+    modifiedIndicator.classList.toggle('hidden', !state.dirty)
+    document.title = `${state.filename} - Quill`
+    void setNativeTitle(`${state.filename}${state.dirty ? ' — Edited' : ''}`)
   }
 
-  // Initialize DOM element references
-  filenameEl = document.getElementById('filename')!
-  modifiedIndicator = document.getElementById('modified-indicator')!
+  fileOps = new FileOps(editor, { onStateChange: applyFileState })
 
-  const tCreateEditorStart = nowMs()
-  createEditor()
-  logPerf('createEditor', tCreateEditorStart)
-  setupKeyboardShortcuts()
-  setFilename('untitled.md')
+  // --- word count (idle-updated, cheap) ---
+  let wordCountTimer: ReturnType<typeof setTimeout> | undefined
+  function updateWordCount(): void {
+    const storage = (editor.storage as Record<string, any>).characterCount
+    const words: number = storage?.words?.() ?? 0
+    wordCountEl.textContent = words === 0 ? '' : `${words.toLocaleString()} word${words === 1 ? '' : 's'}`
+  }
+  function scheduleWordCount(): void {
+    clearTimeout(wordCountTimer)
+    wordCountTimer = setTimeout(updateWordCount, 300)
+  }
 
+  // New code blocks (typed ```lang fences) may need their grammar fetched.
+  let grammarTimer: ReturnType<typeof setTimeout> | undefined
+  function scheduleGrammarCheck(): void {
+    clearTimeout(grammarTimer)
+    grammarTimer = setTimeout(() => ensureGrammarsForDoc(editor), 400)
+  }
+
+  // --- chrome ---
+  linkPopover = new LinkPopover(editor, url => void openUrlExternally(url))
+  mathPopover = new MathPopover(editor)
+  const bubbleMenu = new BubbleMenu(editor, () => linkPopover.showEditor())
+  const slashMenu = new SlashMenu(editor, {
+    // Inserting math from the slash menu drops straight into the LaTeX editor
+    onMathInserted: (kind, pos) => {
+      requestAnimationFrame(() => {
+        const node = editor.state.doc.nodeAt(pos)
+        const dom = editor.view.nodeDOM(pos) as HTMLElement | null
+        if (node && dom) mathPopover.show(kind, node.attrs.latex, pos, elementAnchor(dom))
+      })
+    },
+  })
+  const findBar = new FindBar(editor)
+  void bubbleMenu
+  void slashMenu
+
+  // --- keyboard shortcuts ---
+  document.addEventListener('keydown', e => {
+    const mod = e.metaKey || e.ctrlKey
+    if (!mod) return
+    // e.code, not e.key: with Alt held, macOS gives composed chars ("ƒ" for F)
+    const key = e.code.startsWith('Key') ? e.code.slice(3).toLowerCase() : e.key.toLowerCase()
+
+    if (key === 's') {
+      e.preventDefault()
+      void fileOps.save(e.shiftKey)
+    } else if (key === 'o') {
+      e.preventDefault()
+      void fileOps.openViaDialog()
+    } else if (key === 'n' && !e.shiftKey) {
+      e.preventDefault()
+      void fileOps.newFile()
+    } else if (key === 'k' && !e.shiftKey) {
+      if (!editor.state.selection.empty || editor.isActive('link')) {
+        e.preventDefault()
+        linkPopover.showEditor()
+      }
+    } else if (key === 'f' && !e.shiftKey) {
+      e.preventDefault()
+      findBar.show(e.altKey)
+    }
+    // Cmd+B/I/U/E and Cmd+Z/Shift+Z are handled by the editor's own keymaps.
+  })
+
+  // --- startup file ---
+  applyFileState(fileOps.state)
   const startupFiles = selectStartupFiles(
     window.openedFiles,
-    startupFileFromUrl ? [startupFileFromUrl] : [],
+    params.get('open') ? [params.get('open')!] : [],
   )
 
   if (startupFiles.length > 0) {
-    console.log('Opening startup file:', startupFiles[0])
-    try {
-      if (await openFilePath(startupFiles[0])) {
-        console.log('File opened successfully')
-      }
-    } catch (e) {
-      console.error('Failed to open file:', e)
-    }
+    const tOpen = performance.now()
+    await fileOps.loadPath(startupFiles[0])
+    logPerf(`open startup file`, tOpen)
   } else {
-    console.log('No files to open on startup')
+    fileOps.maybeOfferDraft('')
+  }
+  updateWordCount()
+  editor.view.focus()
+  // WebKit can resync an odd whole-document selection on programmatic focus;
+  // make sure boot always starts from a collapsed caret.
+  if (!(editor.state.selection instanceof TextSelection)) {
+    editor.commands.setTextSelection(0)
   }
 
-  const tShowWindowStart = nowMs()
+  // When the OS window regains focus with nothing else focused in the page,
+  // put the caret back in the editor so typing always works.
+  window.addEventListener('focus', () => {
+    const active = document.activeElement
+    if (!active || active === document.body || active === editor.view.dom) {
+      editor.view.focus()
+    }
+  })
+
+  // --- native window wiring (no-ops in the browser harness) ---
+  void fileOps.guardWindowClose()
+  void (async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      const win = getCurrentWindow()
+      await win.listen<string>('menu', ({ payload }) => {
+        switch (payload) {
+          case 'new': void fileOps.newFile(); break
+          case 'open': void fileOps.openViaDialog(); break
+          case 'save': void fileOps.save(); break
+          case 'save-as': void fileOps.save(true); break
+          case 'undo': editor.chain().focus().undo().run(); break
+          case 'redo': editor.chain().focus().redo().run(); break
+          case 'find': findBar.show(false); break
+          case 'find-replace': findBar.show(true); break
+          case 'clear-recents': FileOps.clearRecents(); break
+        }
+      })
+      await win.listen<string>('menu-open-path', ({ payload }) => {
+        void fileOps.openRecent(payload)
+      })
+      fileOps.syncRecentsToMenu()
+    } catch {
+      // Browser harness: no native menu.
+    }
+  })()
+  const tShow = performance.now()
   await showCurrentWindow()
-  logPerf('showCurrentWindow', tShowWindowStart)
-  logPerf('startup total', tStartupStart)
+  logPerf('showCurrentWindow', tShow)
+  logPerf('startup total', tStartup)
+
+  // Tiny harness/debug seam; kept in production builds (negligible cost).
+  window.quillDebug = { editor, getMarkdown: () => getMarkdown(editor), setMarkdown: (md: string) => setMarkdown(editor, md) }
 })
