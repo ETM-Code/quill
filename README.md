@@ -5,8 +5,15 @@
 <h1 align="center">Quill</h1>
 
 <p align="center">
-  A fast, native markdown editor for macOS.<br/>
+  Open any markdown file instantly as a real document.<br/>
   Notion-style WYSIWYG editing with LaTeX math, tables, task lists, and a ~4.5 MB download.
+</p>
+
+<p align="center">
+  Most of what LLMs produce is markdown, but there is no nice local way to open a lone <code>.md</code> as a
+  document instead of source. Obsidian wants a vault and a slow boot before it shows you one file; MacDown
+  is source-plus-preview, not WYSIWYG. Quill is the missing opener: double-click a markdown file and it
+  renders instantly as an editable document. No vault, no Electron.
 </p>
 
 <p align="center">
