@@ -19,6 +19,7 @@
 <p align="center">
   <a href="#install">Install</a> &middot;
   <a href="#features">Features</a> &middot;
+  <a href="#how-quill-compares">Compare</a> &middot;
   <a href="#performance">Performance</a> &middot;
   <a href="#development">Development</a>
 </p>
@@ -45,6 +46,7 @@ The `.app` bundle and `.dmg` installer will be in `src-tauri/target/release/bund
 - **Task lists** — `- [ ]` checkboxes, clickable, round-trip faithfully.
 - **LaTeX math** — Inline `$E=mc^2$` and block `$$...$$` via KaTeX. Click any equation to edit it in a popover with live preview.
 - **Code blocks** — Syntax highlighting with a language picker and one-click copy. Grammars load lazily per language, so they cost nothing until used.
+- **Images** — Paste, drop, or insert an image. Files are written into an `assets/` folder next to the document and referenced with a relative `![](assets/…)` link; local and remote images render inline. (Saved documents only, so the file has a home on disk.)
 
 **Editing UX**
 
@@ -62,6 +64,22 @@ The `.app` bundle and `.dmg` installer will be in `src-tauri/target/release/bund
 - **Light & dark mode** — Follows the system appearance automatically.
 - **Native macOS** — Overlay titlebar with traffic lights, file associations for `.md`, `.markdown`, `.txt`, word count in the titlebar.
 - **Tiny footprint** — ~11 MB app bundle, ~4.5 MB DMG.
+
+## How Quill compares
+
+Quill lives in a narrow gap: open a *single* `.md` file instantly, edit it as a real WYSIWYG document, and stay tiny and free. Plenty of tools overlap on one axis; almost none hit all of them at once.
+
+| Tool | WYSIWYG | Opens a lone file instantly | Footprint | Open source | Price |
+|---|---|---|---|---|---|
+| **Quill** | Yes, block-style | Yes (the whole point) | ~11 MB (Tauri + system WebKit) | Yes (MIT) | Free |
+| **Typora** | Yes, true inline | Yes | ~100 MB+ (Electron) | No | $14.99 |
+| **MarkText** | Yes | Yes | ~100 MB+ (Electron) | Yes | Free |
+| **Obsidian** | Yes (Live Preview) | No, vault-first | ~100 MB+ (Electron) | No | Free, paid sync |
+| **iA Writer** | Styled source, not blocks | Yes | Native, light | No | ~$30 |
+| **MacDown** | No, source + preview | Yes | Native, light | Yes | Free |
+| **Bear / Craft** | Yes | No, own library | Native | No | Subscription |
+
+The honest read: **Typora** is the only true head-to-head competitor, and it is more featureful. It has been shipping since 2016 and does things Quill does not: export to PDF / Word / HTML via Pandoc, Mermaid diagrams, a large theme ecosystem, and Windows and Linux builds. Quill's case is the opposite trade: it is open source, native, and a fraction of the size (a ~4.5 MB download against Electron's ~100 MB), and free. If you want the kitchen sink, use Typora; if you want a fast, free, lone-file opener that renders instantly, that is Quill. **MarkText** is the closest free analog but ships an Electron runtime and is lightly maintained. Everything else either makes you adopt a vault or library (Obsidian, Bear, Craft), shows you source instead of a rendered document (MacDown), or styles the source rather than editing in blocks (iA Writer).
 
 ## Performance
 

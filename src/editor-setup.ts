@@ -14,6 +14,8 @@ import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
 import { TableKit } from '@tiptap/extension-table'
+import { QuillImage, handleImagePaste, handleImageDrop } from './images'
+import { QuillMermaid, setMermaidClickHandler } from './mermaid'
 import { createLowlight } from 'lowlight'
 import { icons } from './icons'
 
@@ -288,6 +290,7 @@ export interface EditorCallbacks {
   onLinkClick: (anchor: HTMLAnchorElement, pos: number) => void
   onInlineMathClick: (node: { attrs: { latex: string } }, pos: number) => void
   onBlockMathClick: (node: { attrs: { latex: string } }, pos: number) => void
+  onMermaidClick: (code: string, pos: number) => void
   onOpenUrl: (url: string) => void
 }
 
@@ -354,6 +357,10 @@ const QuillBlockMath = BlockMath.extend({
 })
 
 export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbacks): Editor {
+  // Wire the mermaid node-view click through the module-level handler so
+  // nodeViews (which don't receive custom callbacks) can reach main.ts.
+  setMermaidClickHandler((code, pos) => callbacks.onMermaidClick(code, pos))
+
   const editor: Editor = new Editor({
     element,
     // autofocus runs the focus command in a setTimeout; with content loaded in
@@ -375,6 +382,10 @@ export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbac
         },
         // Heading levels 1-6, default config otherwise
       }),
+      // QuillMermaid before QuillCodeBlock: both handle the markdown `code`
+      // token, and the first handler that claims it wins. Mermaid claims only
+      // ```mermaid fences and defers everything else to the code block.
+      QuillMermaid,
       QuillCodeBlock.configure({
         lowlight,
         defaultLanguage: null,
@@ -384,6 +395,7 @@ export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbac
       TableKit.configure({
         table: { resizable: false, allowTableNodeSelection: true },
       }),
+      QuillImage,
       Markdown,
       Placeholder.configure({
         placeholder: ({ node }) => {
@@ -436,6 +448,8 @@ export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbac
       },
       // Pasting markdown-looking plain text parses it into rich content.
       handlePaste: (view: EditorView, event: ClipboardEvent) => {
+        // Pasted image data wins over text handling (writes to disk + inserts).
+        if (handleImagePaste(editor, event)) return true
         const clipboard = event.clipboardData
         if (!clipboard) return false
         const html = clipboard.getData('text/html')
@@ -456,6 +470,10 @@ export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbac
           console.error('markdown paste parse failed:', e)
         }
         return false
+      },
+      handleDrop: (_view: EditorView, event: DragEvent) => {
+        // Dropped image files write to disk + insert at the drop point.
+        return handleImageDrop(editor, event)
       },
       handleClick: (view: EditorView, pos: number, event: MouseEvent) => {
         const target = (event.target as HTMLElement).closest('a')
@@ -578,7 +596,7 @@ type JSONNode = {
  * display with forced line breaks. Code blocks keep their newlines.
  */
 export function normalizeSoftBreaks(node: JSONNode): JSONNode {
-  if (node.type === 'codeBlock') return node
+  if (node.type === 'codeBlock' || node.type === 'mermaid') return node
   if (typeof node.text === 'string' && node.text.includes('\n')) {
     node.text = node.text.replace(/[ \t]*\n[ \t]*/g, ' ')
   }

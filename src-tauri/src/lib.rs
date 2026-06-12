@@ -52,6 +52,18 @@ fn read_markdown_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("failed to read {path}: {e}"))
 }
 
+/// Write image bytes to `path`, creating parent directories (e.g. `assets/`)
+/// as needed. Used when pasting/dropping images next to the document.
+#[tauri::command]
+fn write_image_file(path: String, contents: Vec<u8>) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(&target, &contents).map_err(|e| format!("failed to write {path}: {e}"))
+}
+
 #[tauri::command]
 fn set_window_dirty(
     window: tauri::WebviewWindow,
@@ -427,6 +439,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             register_frontend_ready,
             read_markdown_file,
+            write_image_file,
             set_window_dirty,
             update_recent_files,
             new_window
@@ -597,5 +610,16 @@ mod tests {
     fn display_name_extracts_basename() {
         assert_eq!(display_name("/Users/x/notes/today.md"), "today.md");
         assert_eq!(display_name("plain.md"), "plain.md");
+    }
+
+    #[test]
+    fn write_image_file_creates_parent_dirs_and_writes_bytes() {
+        let dir = std::env::temp_dir().join("quill-img-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("assets").join("img-deadbeef.png");
+        let bytes = vec![0x89u8, 0x50, 0x4e, 0x47];
+        write_image_file(path.to_string_lossy().to_string(), bytes.clone()).expect("write image");
+        assert_eq!(std::fs::read(&path).expect("read back"), bytes);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

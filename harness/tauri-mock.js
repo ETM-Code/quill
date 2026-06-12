@@ -127,6 +127,10 @@
         }
         case 'register_frontend_ready':
           return []
+        case 'write_image_file':
+          // Record the written path so tests can assert; bytes arrive as number[].
+          files.set(args.path, '<image-bytes>')
+          return null
 
         default:
           console.warn('[tauri-mock] unhandled invoke:', cmd, args)

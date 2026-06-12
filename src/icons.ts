@@ -25,6 +25,7 @@ export const icons = {
   codeBlock: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m9 10-2 2 2 2"/><path d="m15 10 2 2-2 2"/>'),
   table: svg('<rect x="3" y="4" width="18" height="16" rx="1.5"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="10" y1="4" x2="10" y2="20"/>'),
   math: svg('<path d="M5 5h14"/><path d="M5 5l7 7-7 7h14"/>', '0 0 24 24'),
+  image: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-4.5-4.5L5 21"/>'),
   divider: svg('<line x1="3" y1="12" x2="21" y2="12"/><circle cx="12" cy="6" r="0.5" fill="currentColor"/><circle cx="12" cy="18" r="0.5" fill="currentColor"/>'),
   paragraph: svg('<path d="M13 4v16"/><path d="M17 4v16"/><path d="M19 4H9.5a4.5 4.5 0 0 0 0 9H13"/>'),
   trash: svg('<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
@@ -43,6 +44,7 @@ export const icons = {
   headerRow: svg('<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 10h18"/><path d="M3 4h18v6H3z" fill="currentColor" stroke="none" opacity="0.3"/>'),
   rowDelete: svg('<rect x="3" y="9" width="12" height="6" rx="1.5"/><circle cx="19.5" cy="12" r="3.4"/><line x1="17.8" y1="12" x2="21.2" y2="12"/>'),
   colDelete: svg('<rect x="9" y="3" width="6" height="12" rx="1.5"/><circle cx="12" cy="19.5" r="3.4"/><line x1="10.3" y1="19.5" x2="13.7" y2="19.5"/>'),
+  mermaid: svg('<rect x="3" y="3" width="6" height="4" rx="1"/><rect x="15" y="3" width="6" height="4" rx="1"/><rect x="9" y="17" width="6" height="4" rx="1"/><line x1="6" y1="7" x2="6" y2="12"/><line x1="18" y1="7" x2="18" y2="12"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="12" y1="12" x2="12" y2="17"/>'),
 }
 
 export type IconName = keyof typeof icons

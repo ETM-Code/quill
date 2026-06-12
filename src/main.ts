@@ -6,6 +6,7 @@ import { selectStartupFiles } from './startup-files'
 import { BubbleMenu } from './ui/bubble-menu'
 import { LinkPopover } from './ui/link-popover'
 import { MathPopover } from './ui/math-popover'
+import { MermaidPopover } from './ui/mermaid-popover'
 import { SlashMenu } from './ui/slash-menu'
 import { FindBar } from './ui/find-bar'
 import { elementAnchor } from './ui/popover'
@@ -33,6 +34,25 @@ async function openUrlExternally(url: string): Promise<void> {
   } catch (e) {
     console.error('Failed to open URL:', e)
     showToast(`Couldn't open link: ${e}`, { kind: 'error' })
+  }
+}
+
+async function insertImageViaDialog(editor: Editor): Promise<void> {
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const picked = await open({
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'] }],
+      multiple: false,
+    })
+    if (typeof picked !== 'string') return
+    const { readFile } = await import('@tauri-apps/plugin-fs')
+    const bytes = await readFile(picked)
+    const ext = picked.slice(picked.lastIndexOf('.') + 1).toLowerCase() || 'png'
+    const { insertImageBytes } = await import('./images')
+    await insertImageBytes(editor, bytes, ext)
+  } catch (e) {
+    console.error('Insert image failed:', e)
+    showToast(`Couldn't insert image: ${e}`, { kind: 'error' })
   }
 }
 
@@ -71,6 +91,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let fileOps: FileOps
   let linkPopover: LinkPopover
   let mathPopover: MathPopover
+  let mermaidPopover: MermaidPopover
 
   const editor = createQuillEditor(editorEl, {
     onDocChanged: () => {
@@ -86,6 +107,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     onBlockMathClick: (node, pos) => {
       const dom = editor.view.nodeDOM(pos) as HTMLElement | null
       if (dom) mathPopover.show('block', node.attrs.latex, pos, elementAnchor(dom))
+    },
+    onMermaidClick: (code, pos) => {
+      const dom = editor.view.nodeDOM(pos) as HTMLElement | null
+      if (dom) mermaidPopover.show(code, pos, elementAnchor(dom))
     },
     onOpenUrl: url => void openUrlExternally(url),
   })
@@ -123,6 +148,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // --- chrome ---
   linkPopover = new LinkPopover(editor, url => void openUrlExternally(url))
   mathPopover = new MathPopover(editor)
+  mermaidPopover = new MermaidPopover(editor)
   const bubbleMenu = new BubbleMenu(editor, () => linkPopover.showEditor())
   const slashMenu = new SlashMenu(editor, {
     // Inserting math from the slash menu drops straight into the LaTeX editor
@@ -131,6 +157,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         const node = editor.state.doc.nodeAt(pos)
         const dom = editor.view.nodeDOM(pos) as HTMLElement | null
         if (node && dom) mathPopover.show(kind, node.attrs.latex, pos, elementAnchor(dom))
+      })
+    },
+    onInsertImage: () => void insertImageViaDialog(editor),
+    onMermaidInserted: (pos) => {
+      requestAnimationFrame(() => {
+        const node = editor.state.doc.nodeAt(pos)
+        const dom = editor.view.nodeDOM(pos) as HTMLElement | null
+        if (node && dom) mermaidPopover.show(node.attrs.code as string, pos, elementAnchor(dom))
       })
     },
   })

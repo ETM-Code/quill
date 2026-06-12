@@ -2,6 +2,7 @@
 // crash-recovery drafts, and unsaved-changes guard on window close.
 import type { Editor } from '@tiptap/core'
 import { getMarkdown, setMarkdown } from './editor-setup'
+import { configureImages } from './images'
 import { showToast } from './ui/toast'
 
 const RECENT_KEY = 'quill-recent-files'
@@ -22,6 +23,21 @@ interface FileOpsCallbacks {
 function getBasename(filePath: string): string {
   const parts = filePath.split(/[/\\]/)
   return parts[parts.length - 1] || 'untitled.md'
+}
+
+function getDirname(filePath: string): string {
+  const i = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+  return i >= 0 ? filePath.slice(0, i) : '.'
+}
+
+/** Stable short name for pasted image bytes so re-pasting reuses the file. */
+function hashBytes(bytes: Uint8Array): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < bytes.length; i++) {
+    h ^= bytes[i]
+    h = Math.imul(h, 0x01000193)
+  }
+  return (h >>> 0).toString(16).padStart(8, '0')
 }
 
 async function invokeBackend<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -51,6 +67,36 @@ export class FileOps {
     } else {
       setTimeout(warm, 1500)
     }
+
+    this.refreshImageContext(null)
+  }
+
+  /**
+   * Point the image layer at the current document: relative srcs render against
+   * its directory, and pasted/dropped images get written into `<dir>/assets/`.
+   * Pass the path explicitly when it isn't on `this.path` yet (e.g. before
+   * setMarkdown during a load) so the first render can resolve local images.
+   */
+  private refreshImageContext(path: string | null = this.path): void {
+    configureImages({
+      baseDir: path ? getDirname(path) : null,
+      saver: async (bytes, ext) => {
+        if (!this.path) {
+          showToast('Save the document first to add images', { kind: 'info' })
+          return null
+        }
+        const name = `img-${hashBytes(bytes)}.${ext}`
+        const abs = `${getDirname(this.path)}/assets/${name}`
+        try {
+          await invokeBackend('write_image_file', { path: abs, contents: Array.from(bytes) })
+        } catch (e) {
+          console.error('Image write failed:', e)
+          showToast(`Couldn't save image: ${e}`, { kind: 'error' })
+          return null
+        }
+        return `assets/${name}`
+      },
+    })
   }
 
   get state(): FileState {
@@ -189,6 +235,7 @@ export class FileOps {
 
       this.clearDraft()
       this.path = targetPath
+      this.refreshImageContext()
       this.setDirty(false)
       this.touchRecent(targetPath)
       this.emit()
@@ -230,6 +277,8 @@ export class FileOps {
         content = await invokeBackend<string>('read_markdown_file', { path: filePath })
       }
 
+      // Set the image base dir before rendering so local images resolve.
+      this.refreshImageContext(filePath)
       setMarkdown(this.editor, content)
       this.path = filePath
       this.setDirty(false)
@@ -254,6 +303,7 @@ export class FileOps {
     this.clearDraft()
     this.editor.commands.clearContent(true)
     this.path = null
+    this.refreshImageContext(null)
     this.setDirty(false)
     this.emit()
     this.editor.commands.focus()
