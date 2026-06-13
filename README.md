@@ -28,14 +28,45 @@
 
 ## Install
 
-Download the latest `.dmg` from [Releases](https://github.com/ETM-Code/quill/releases), or build from source:
+Quill is a native macOS app. Download the latest `Quill_x.y.z_aarch64.dmg` from
+[Releases](https://github.com/ETM-Code/quill/releases), open it, and drag **Quill** into your
+Applications folder.
+
+### First launch
+
+Quill is **not** signed with a paid Apple Developer certificate (that program is $99/yr; Quill is a
+free side project). The app is ad-hoc signed, so it runs fine once it's on your machine, but macOS
+Gatekeeper flags anything downloaded from the internet and will block the first launch. You clear
+that once, either way works:
+
+**Terminal (fastest):**
+
+```bash
+xattr -cr /Applications/Quill.app
+```
+
+That strips the `com.apple.quarantine` flag macOS attaches to downloads. Then open Quill normally.
+
+**No terminal:** double-click Quill and let macOS block it, then open **System Settings → Privacy &
+Security**, scroll to the security notice near the bottom, and click **Open Anyway**. (On macOS 14
+and earlier you can instead right-click the app → **Open**.)
+
+You only do this once per install. After that Quill launches like any other app.
+
+> **Why the hoop?** Without an Apple Developer subscription there's no way to *notarize* the app,
+> which is the only thing that makes macOS open an unsigned download silently. The quarantine step
+> above is the standard workaround for free, open-source Mac apps. If you'd rather not run an
+> unsigned binary at all, build it yourself (below) — a locally built app is never quarantined.
+
+### Build from source
 
 ```bash
 bun install
 bun run tauri build
 ```
 
-The `.app` bundle and `.dmg` installer will be in `src-tauri/target/release/bundle/`.
+The `.app` bundle and `.dmg` installer land in `src-tauri/target/release/bundle/`. Requires
+[Bun](https://bun.sh), [Rust](https://rustup.rs), and Xcode Command Line Tools.
 
 ## Features
 

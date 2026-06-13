@@ -1,0 +1,47 @@
+name: Release
+
+# Builds the macOS app and publishes a GitHub Release with the .dmg attached.
+# Triggers on any pushed tag like `v0.1.0`. The tag's version should match the
+# `version` field in src-tauri/tauri.conf.json.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # macos-latest is an Apple Silicon (arm64) runner, so this produces the
+    # aarch64 .dmg referenced in the README. The build is ad-hoc signed, not
+    # notarized (no paid Apple Developer cert), which is expected.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Quill ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
+          args: ""
