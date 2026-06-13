@@ -10,10 +10,10 @@
 </p>
 
 <p align="center">
-  Most of what LLMs produce is markdown, but there's no nice local way to open a lone <code>.md</code>
-  as a document instead of source. Obsidian wants a vault and a slow boot; MacDown shows source plus a
-  preview, not WYSIWYG. Quill is the missing opener: double-click a markdown file and it renders
-  instantly as an editable document. No vault, no Electron.
+  Most of what LLMs produce is markdown, and in 2026 opening a lone <code>.md</code> as a real document
+  (not raw source) turned into a small rush of tools. Quill's cut: native, block-style WYSIWYG, fully
+  open source down to the editor, a few megabytes, and also a VS Code extension. Double-click a markdown
+  file and it renders instantly as an editable document. No vault, no Electron.
 </p>
 
 <p align="center">
@@ -92,19 +92,38 @@ The `.app` and `.dmg` land in `src-tauri/target/release/bundle/`. Requires [Bun]
 
 ## How Quill compares
 
-Quill lives in a narrow gap: open a *single* `.md` file instantly, edit it as a real WYSIWYG document, and stay tiny and free. Plenty of tools overlap on one axis; almost none hit all of them at once.
+Opening a lone `.md` as a real document instead of raw source went from a gap to a crowd in 2026 — a dozen-odd tools now do some version of it. They sort into camps:
 
-| Tool | WYSIWYG | Opens a lone file instantly | Footprint | Open source | Price |
+- **Instant native WYSIWYG openers** — double-click, edit it rendered, stay small: Quill, [MarkViewer](https://markviewer.com), [DOMD](https://github.com/do-md/domd).
+- **Render-only surfaces** — show it, don't edit it: [MacMD Viewer](https://macmdviewer.com), Finder's own Quick Look.
+- **Agent-facing tools** — built to render what an AI writes: [SmallDocs](https://github.com/espressoplease/SDocs) (`sdoc`, a CLI), DOMD's streaming CLI, MacMD's file-watching.
+- **Cross-platform Rust entrants** — [Ferrite](https://getferrite.dev) (egui) and [Inkwell](https://inkwell.4worlds.dev) (Tauri), more split/preview than pure inline.
+- **The heavyweights** — [Obsidian](https://obsidian.md), [Typora](https://typora.io), [iA Writer](https://ia.net/writer), and [MarkText](https://github.com/marktext/marktext) (Electron, 57k★, and despite the rumor still actively maintained).
+
+**The 2026 lightweight wave:**
+
+| Tool | Editing | Tech / size | Open source | Price | Angle |
 |---|---|---|---|---|---|
-| **Quill** | Yes, block-style | Yes (the whole point) | ~7 MB (Tauri + system WebKit) | Yes (MIT) | Free |
-| **Typora** | Yes, true inline | Yes | ~100 MB+ (Electron) | No | $14.99 |
-| **MarkText** | Yes | Yes | ~100 MB+ (Electron) | Yes | Free |
-| **Obsidian** | Yes (Live Preview) | No, vault-first | ~100 MB+ (Electron) | No | Free, paid sync |
-| **iA Writer** | Styled source, not blocks | Yes | Native, light | No | ~$30 |
-| **MacDown** | No, source + preview | Yes | Native, light | Yes | Free |
-| **Bear / Craft** | Yes | No, own library | Native | No | Subscription |
+| **Quill** | Block WYSIWYG | Tauri, ~7 MB | Yes, MIT (editor included) | Free | Math, Mermaid, code, tables, tasks, images; VS Code twin |
+| **MarkViewer** | Inline WYSIWYG | Native, Universal | No (binaries only) | Free | AI-review loop; shipped Dec 2025, very active |
+| **DOMD** | Inline WYSIWYG | Tauri, ~8.5 MB | App MIT, engine noncommercial | Free | 20 KB custom kernel, live AI token streaming, CLI |
+| **MacMD Viewer** | Read-only | Native SwiftUI, ~18 MB | No | $19.99 | QuickLook + auto-refresh when an agent rewrites the file |
+| **Ferrite** | Raw / rendered / split | Native Rust (egui), ~15 MB | Yes, MIT | Free | Native Mermaid, Vim, JSON/YAML/TOML, Git |
+| **Inkwell** | Source + preview | Tauri, ~18 MB | Source-available | Free + $19 Pro | KaTeX, Typst PDF export, offline-first |
+| **Nimbalyst** | Inline WYSIWYG | Electron | Yes, MIT | Free | Agentic-dev workspace (Claude Code / Codex) with inline AI diffs |
+| **SmallDocs** | Source + preview | Node CLI → browser | Yes, MIT | Free | "CLI for you and your agents"; pipe in, share links |
 
-**Typora** is the only true head-to-head competitor, and it's more featureful: export to PDF / Word / HTML via Pandoc, a large theme ecosystem, and Windows and Linux builds. Quill's trade is the opposite: open source, native, free, and a fraction of the size (~5.5 MB against Electron's ~100 MB). Want the kitchen sink? Use Typora. Want a fast, free, lone-file opener that renders instantly? That's Quill. **MarkText** is the closest free analog but ships Electron and is lightly maintained. Everything else makes you adopt a vault or library (Obsidian, Bear, Craft), shows source instead of a rendered document (MacDown), or styles the source rather than editing in blocks (iA Writer).
+**The established tools:**
+
+| Tool | Editing | Tech / size | Open source | Price | Notable |
+|---|---|---|---|---|---|
+| **Typora** | True inline WYSIWYG | Electron, ~100 MB+ | No | $14.99 (3 devices) | Pandoc export, Mermaid, 200+ themes; also Win/Linux |
+| **MarkText** | Real-time WYSIWYG | Electron, ~100 MB+ | Yes, MIT | Free | 57k★, revived and active in 2026 |
+| **Obsidian** | Live Preview | Electron, ~100 MB+ | No | Free / $50-yr commercial | Vault-first, vast plugin ecosystem |
+| **iA Writer** | Styled source | Native, light | No | $49.99 (Mac) | Focus mode, authorship (AI-vs-typed) tracking |
+| **MacDown** | Source + preview | Native, light | Yes, MIT | Free | The original lightweight Mac `.md` tool |
+
+Quill isn't the only instant opener anymore, and it isn't the most mature: MarkViewer shipped first and has an AI-review loop, and DOMD's from-scratch kernel is built to stream AI output in a way a ProseMirror-based editor isn't. Where Quill stands out is **openness and editing depth** — it's fully MIT down to the editor (MarkViewer ships binaries only, DOMD's engine is noncommercial-licensed, MacMD and Inkwell's Pro tier are paid), it has the richest writing surface of the tiny native ones (math, Mermaid, code highlighting, table controls, task lists, image-paste-to-`assets/`), and it's the only one that also runs inside VS Code. Want any instant Mac opener? Several here will do. Want a free, fully open one with the full feature set that also lives in your editor? That's Quill.
 
 ## Performance
 
