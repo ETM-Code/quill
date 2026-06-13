@@ -33,6 +33,13 @@ Quill is a native macOS app. Grab the latest `.dmg` from
 Silicon (M1 and later) or `Quill_x.y.z_x64.dmg` for Intel Macs — open it, and drag **Quill** into
 your Applications folder.
 
+> **Not on a Mac, or live in your editor?** There's a sibling
+> [**Quill for VS Code**](https://marketplace.visualstudio.com/items?itemName=etm-code.quill-vscode)
+> extension that brings the same WYSIWYG editor into VS Code on any platform. Install *Quill Markdown
+> Editor* (`etm-code.quill-vscode`) from the Marketplace, or grab a `.vsix` from
+> [its releases](https://github.com/ETM-Code/quill-vscode/releases). It shares Quill's editor core,
+> so editing feels identical. Repo: [ETM-Code/quill-vscode](https://github.com/ETM-Code/quill-vscode).
+
 ### First launch
 
 Quill is **not** signed with a paid Apple Developer certificate (that program is $99/yr; Quill is a
