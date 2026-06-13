@@ -6,14 +6,14 @@
 
 <p align="center">
   Open any markdown file instantly as a real document.<br/>
-  Notion-style WYSIWYG editing with LaTeX math, tables, task lists, and a ~5.5 MB download.
+  Notion-style WYSIWYG editing with LaTeX math, Mermaid diagrams, tables, and a ~5.5 MB download.
 </p>
 
 <p align="center">
-  Most of what LLMs produce is markdown, but there is no nice local way to open a lone <code>.md</code> as a
-  document instead of source. Obsidian wants a vault and a slow boot before it shows you one file; MacDown
-  is source-plus-preview, not WYSIWYG. Quill is the missing opener: double-click a markdown file and it
-  renders instantly as an editable document. No vault, no Electron.
+  Most of what LLMs produce is markdown, but there's no nice local way to open a lone <code>.md</code>
+  as a document instead of source. Obsidian wants a vault and a slow boot; MacDown shows source plus a
+  preview, not WYSIWYG. Quill is the missing opener: double-click a markdown file and it renders
+  instantly as an editable document. No vault, no Electron.
 </p>
 
 <p align="center">
@@ -29,42 +29,27 @@
 ## Install
 
 Quill is a native macOS app. Grab the latest `.dmg` from
-[Releases](https://github.com/ETM-Code/quill/releases) — `Quill_x.y.z_aarch64.dmg` for Apple
-Silicon (M1 and later) or `Quill_x.y.z_x64.dmg` for Intel Macs — open it, and drag **Quill** into
-your Applications folder.
+[Releases](https://github.com/ETM-Code/quill/releases) — `Quill_x.y.z_aarch64.dmg` for Apple Silicon
+(M1 and later) or `Quill_x.y.z_x64.dmg` for Intel — open it, and drag **Quill** into Applications.
 
-> **Not on a Mac, or live in your editor?** There's a sibling
+> **Not on a Mac?** The sibling
 > [**Quill for VS Code**](https://marketplace.visualstudio.com/items?itemName=etm-code.quill-vscode)
-> extension that brings the same WYSIWYG editor into VS Code on any platform. Install *Quill Markdown
-> Editor* (`etm-code.quill-vscode`) from the Marketplace, or grab a `.vsix` from
-> [its releases](https://github.com/ETM-Code/quill-vscode/releases). It shares Quill's editor core,
-> so editing feels identical. Repo: [ETM-Code/quill-vscode](https://github.com/ETM-Code/quill-vscode).
+> extension runs the same editor in VS Code on any platform. Install *Quill Markdown Editor*
+> (`etm-code.quill-vscode`) from the Marketplace, or grab a `.vsix` from
+> [its releases](https://github.com/ETM-Code/quill-vscode/releases).
 
 ### First launch
 
-Quill is **not** signed with a paid Apple Developer certificate (that program is $99/yr; Quill is a
-free side project). The app is ad-hoc signed, so it runs fine once it's on your machine, but macOS
-Gatekeeper flags anything downloaded from the internet and will block the first launch. You clear
-that once, either way works:
-
-**Terminal (fastest):**
+Quill is ad-hoc signed but not notarized (notarizing needs a $99/yr Apple Developer account, and Quill
+is a free side project), so macOS Gatekeeper blocks the first launch of a download. Clear it once:
 
 ```bash
 xattr -cr /Applications/Quill.app
 ```
 
-That strips the `com.apple.quarantine` flag macOS attaches to downloads. Then open Quill normally.
-
-**No terminal:** double-click Quill and let macOS block it, then open **System Settings → Privacy &
-Security**, scroll to the security notice near the bottom, and click **Open Anyway**. (On macOS 14
-and earlier you can instead right-click the app → **Open**.)
-
-You only do this once per install. After that Quill launches like any other app.
-
-> **Why the hoop?** Without an Apple Developer subscription there's no way to *notarize* the app,
-> which is the only thing that makes macOS open an unsigned download silently. The quarantine step
-> above is the standard workaround for free, open-source Mac apps. If you'd rather not run an
-> unsigned binary at all, build it yourself (below) — a locally built app is never quarantined.
+That removes the `com.apple.quarantine` flag and Quill opens normally from then on. No terminal? Open
+Quill, let macOS block it, then go to **System Settings → Privacy & Security → Open Anyway**. Or skip
+the unsigned binary entirely and build from source — a local build is never quarantined.
 
 ### Build from source
 
@@ -73,8 +58,8 @@ bun install
 bun run tauri build
 ```
 
-The `.app` bundle and `.dmg` installer land in `src-tauri/target/release/bundle/`. Requires
-[Bun](https://bun.sh), [Rust](https://rustup.rs), and Xcode Command Line Tools.
+The `.app` and `.dmg` land in `src-tauri/target/release/bundle/`. Requires [Bun](https://bun.sh),
+[Rust](https://rustup.rs), and Xcode Command Line Tools.
 
 ## Features
 
@@ -83,25 +68,26 @@ The `.app` bundle and `.dmg` installer land in `src-tauri/target/release/bundle/
 - **WYSIWYG markdown** — Write in rich text, save as plain `.md`. Headings, bold, italic, underline, strikethrough, lists, blockquotes, code, links.
 - **Tables** — GFM tables render and edit inline; row/column controls appear in the toolbar when the caret is inside one.
 - **Task lists** — `- [ ]` checkboxes, clickable, round-trip faithfully.
-- **LaTeX math** — Inline `$E=mc^2$` and block `$$...$$` via KaTeX. Click any equation to edit it in a popover with live preview.
+- **LaTeX math** — Inline `$E=mc^2$` and block `$$...$$` via KaTeX. Click an equation to edit it in a popover with live preview.
+- **Mermaid diagrams** — A fenced `mermaid` code block renders as a diagram (or insert one with `/`); click it to edit in a popover with live preview.
 - **Code blocks** — Syntax highlighting with a language picker and one-click copy. Grammars load lazily per language, so they cost nothing until used.
-- **Images** — Paste, drop, or insert an image. Files are written into an `assets/` folder next to the document and referenced with a relative `![](assets/…)` link; local and remote images render inline. (Saved documents only, so the file has a home on disk.)
+- **Images** — Paste, drop, or insert. Files are saved into an `assets/` folder beside the document and linked relatively; local and remote images render inline. (Saved documents only.)
 
 **Editing UX**
 
 - **Formatting toolbar** — Select text and a Notion-style bubble menu appears: turn-into dropdown, marks, link.
-- **Slash commands** — Type `/` on an empty line to insert any block: headings, lists, tables, math, dividers, code.
-- **Links that work** — Click a link for a popover (open / edit / remove), ⌘-click to open directly, ⌘K to create one from a selection. Pasted URLs onto selections become links.
+- **Slash commands** — Type `/` on an empty line to insert any block: headings, lists, tables, math, diagrams, dividers, code.
+- **Links that work** — Click for a popover (open / edit / remove), ⌘-click to open, ⌘K to create one from a selection. Pasted URLs onto selections become links.
 - **Find & replace** — ⌘F to find, ⌘⌥F to replace, with live match highlighting.
-- **Markdown clipboard** — Copying puts markdown on the clipboard (paste structure into any app); pasting markdown text recreates rich blocks.
+- **Markdown clipboard** — Copy puts markdown on the clipboard; pasting markdown text recreates rich blocks.
 
 **App behavior**
 
-- **Native menu bar** — File / Edit / Window menus with Open Recent, all standard shortcuts.
-- **Unsaved-changes guards** — Closing a dirty window asks to save; quitting with dirty documents asks first.
-- **Crash-safe drafts** — Unsaved work is checkpointed locally every couple of seconds; on relaunch Quill offers to restore it.
-- **Light & dark mode** — Follows the system appearance automatically.
-- **Native macOS** — Overlay titlebar with traffic lights, file associations for `.md`, `.markdown`, `.txt`, word count in the titlebar.
+- **Native menu bar** — File / Edit / Window menus with Open Recent and all standard shortcuts.
+- **Unsaved-changes guards** — Closing a dirty window or quitting with unsaved work asks first.
+- **Crash-safe drafts** — Unsaved work is checkpointed every couple of seconds; on relaunch Quill offers to restore it.
+- **Light & dark mode** — Follows the system appearance.
+- **Native macOS** — Overlay titlebar, file associations for `.md`, `.markdown`, `.txt`, word count in the titlebar.
 - **Tiny footprint** — ~7 MB app bundle, ~5.5 MB DMG.
 
 ## How Quill compares
@@ -118,12 +104,11 @@ Quill lives in a narrow gap: open a *single* `.md` file instantly, edit it as a 
 | **MacDown** | No, source + preview | Yes | Native, light | Yes | Free |
 | **Bear / Craft** | Yes | No, own library | Native | No | Subscription |
 
-The honest read: **Typora** is the only true head-to-head competitor, and it is more featureful. It has been shipping since 2016 and does things Quill does not: export to PDF / Word / HTML via Pandoc, Mermaid diagrams, a large theme ecosystem, and Windows and Linux builds. Quill's case is the opposite trade: it is open source, native, and a fraction of the size (a ~5.5 MB download against Electron's ~100 MB), and free. If you want the kitchen sink, use Typora; if you want a fast, free, lone-file opener that renders instantly, that is Quill. **MarkText** is the closest free analog but ships an Electron runtime and is lightly maintained. Everything else either makes you adopt a vault or library (Obsidian, Bear, Craft), shows you source instead of a rendered document (MacDown), or styles the source rather than editing in blocks (iA Writer).
+**Typora** is the only true head-to-head competitor, and it's more featureful: export to PDF / Word / HTML via Pandoc, a large theme ecosystem, and Windows and Linux builds. Quill's trade is the opposite: open source, native, free, and a fraction of the size (~5.5 MB against Electron's ~100 MB). Want the kitchen sink? Use Typora. Want a fast, free, lone-file opener that renders instantly? That's Quill. **MarkText** is the closest free analog but ships Electron and is lightly maintained. Everything else makes you adopt a vault or library (Obsidian, Bear, Craft), shows source instead of a rendered document (MacDown), or styles the source rather than editing in blocks (iA Writer).
 
 ## Performance
 
-Measured on an Apple M3 (release build, `harness/smoke-macos.sh`; timings include
-`open(1)` and polling overhead, so true figures are slightly better):
+Measured on an Apple M3 (release build, `harness/smoke-macos.sh`; timings include `open(1)` and polling overhead, so true figures are slightly better):
 
 | Scenario | Time |
 |---|---:|
@@ -132,36 +117,34 @@ Measured on an Apple M3 (release build, `harness/smoke-macos.sh`; timings includ
 | Open a 209 KB document into the running app | ~0.6–0.9 s |
 | Reopen after closing last window (keepalive) | ~0.3 s |
 
-The 209 KB case used to take 2.3 s+: marked's lexer is quadratic in input size,
-so Quill now splits large documents into parse-safe chunks (never inside fences,
-lists, quotes, or tables — verified byte-identical against whole-document
-parsing) and parses each independently. 209 KB parses in ~450 ms instead of 5.7 s.
+The 209 KB case used to take 2.3 s+: marked's lexer is quadratic in input size, so Quill splits large documents at safe top-level boundaries (never inside fences, lists, quotes, or tables, verified byte-identical against whole-document parsing) and parses each chunk independently. 209 KB now parses in ~450 ms instead of 5.7 s.
 
 ## How it works
 
-Quill is a [Tauri 2](https://tauri.app) app. The backend is Rust; the frontend runs in the system WebKit view (no bundled browser engine). The editor is [Tiptap](https://tiptap.dev) (ProseMirror) with the [Markdown extension](https://tiptap.dev/docs/extensions/markdown) for round-trip `.md` serialization.
+Quill is a [Tauri 2](https://tauri.app) app: Rust backend, frontend in the system WebKit view (no bundled browser engine). The editor is [Tiptap](https://tiptap.dev) (ProseMirror) with the [Markdown extension](https://tiptap.dev/docs/extensions/markdown) for round-trip `.md` serialization.
 
 **Key design choices:**
 
-- **One editor instance for the window's lifetime** — syntax-highlight grammars are registered into the live lowlight instance per language on demand (each is its own ~1–8 KB chunk), instead of recreating the editor, so undo history survives.
+- **One editor instance for the window's lifetime** — syntax-highlight grammars register into the live lowlight instance per language on demand (each its own ~1–8 KB chunk) rather than recreating the editor, so undo history survives.
 - **Chunked markdown parsing** — sidesteps marked's quadratic lexer on large files (see Performance).
-- **Markdown-native math** — `$...$` is parsed by the Mathematics extension's own tokenizer during markdown parsing; no post-parse document rewriting.
-- **Blank keepalive window** — a hidden, JS-free page keeps the process alive on macOS after the last editor window closes, so reopening is ~0.3 s.
-- **Custom Quit menu item** — the predefined one sends `terminate:` directly, bypassing Tauri's exit events, which would skip the unsaved-changes guard.
-- **Window URL params** — files opened via macOS file association are passed through URL query params, avoiding IPC races at startup.
+- **Markdown-native math** — `$...$` is parsed by the Mathematics extension's own tokenizer during parsing; no post-parse rewriting.
+- **Blank keepalive window** — a hidden, JS-free page keeps the process alive after the last editor window closes, so reopening is ~0.3 s.
+- **Custom Quit menu item** — the predefined one sends `terminate:` directly, bypassing Tauri's exit events and skipping the unsaved-changes guard.
+- **Window URL params** — files opened via file association pass through URL query params, avoiding IPC races at startup.
 
 ```
 quill/
-├── src/                       # Frontend (TypeScript, no framework)
-│   ├── main.ts                # Boot, wiring, shortcuts, menu events
-│   ├── editor-setup.ts        # Tiptap extensions, lazy grammars, chunked parse, clipboard
-│   ├── file-ops.ts            # Open/save/dirty/recents/drafts/close guard
-│   ├── icons.ts               # Inline SVG icon set
-│   └── ui/                    # Bubble menu, slash menu, popovers, find bar, toasts
-├── src-tauri/                 # Backend (Rust)
-│   ├── src/lib.rs             # Windows, native menu, quit guard, file associations
+├── src/                    # Frontend (TypeScript, no framework)
+│   ├── main.ts             # Boot, wiring, shortcuts, menu events
+│   ├── editor-setup.ts     # Tiptap extensions, lazy grammars, chunked parse, clipboard
+│   ├── file-ops.ts         # Open/save/dirty/recents/drafts/close guard
+│   ├── images.ts           # Image paste/drop, assets/ writes, markdown round-trip
+│   ├── mermaid.ts          # Mermaid diagram node + lazy renderer
+│   └── ui/                 # Bubble menu, slash menu, popovers, find bar, toasts
+├── src-tauri/              # Backend (Rust)
+│   ├── src/lib.rs          # Windows, native menu, quit guard, file associations
 │   └── tauri.conf.json
-├── harness/                   # Test harness (see Development)
+├── harness/                # Test harness (see Development)
 └── index.html
 ```
 
@@ -195,15 +178,15 @@ bun run tauri build # Production build
 
 ```bash
 bun test                    # Unit tests (markdown chunking, startup files)
-bun harness/features.ts     # 66 end-to-end UI flows in real WebKit (Playwright + Tauri IPC mock)
+bun harness/features.ts     # End-to-end UI flows in real WebKit (Playwright + Tauri IPC mock)
 bun harness/audit.ts        # Round-trip fidelity + rendering audit
-bun run build && bun harness/perf.ts   # Performance measurements vs the production build
 bash harness/smoke-macos.sh # Packaged-app smoke test: launch, file assoc, keepalive, quit
 cd src-tauri && cargo test  # Backend tests
 ```
 
-The harness runs the real frontend in Playwright WebKit with the Tauri IPC layer mocked (`harness/tauri-mock.js`), so file dialogs, saves, and the opener plugin are observable and scriptable. The smoke test drives the actual packaged `.app`.
+The harness runs the real frontend in Playwright WebKit with the Tauri IPC layer mocked (`harness/tauri-mock.js`), so dialogs, saves, and the opener are scriptable. The smoke test drives the actual packaged `.app`.
 
 ## License
 
 MIT
+</content>
