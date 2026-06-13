@@ -1,8 +1,8 @@
 name: Release
 
-# Builds the macOS app and publishes a GitHub Release with the .dmg attached.
-# Triggers on any pushed tag like `v0.1.0`. The tag's version should match the
-# `version` field in src-tauri/tauri.conf.json.
+# Builds the macOS app for both architectures and publishes a GitHub Release
+# with the .dmg files attached. Triggers on any pushed tag like `v0.1.0`. The
+# tag's version should match the `version` field in src-tauri/tauri.conf.json.
 on:
   push:
     tags:
@@ -14,20 +14,30 @@ permissions:
 
 jobs:
   release:
-    # macos-latest is an Apple Silicon (arm64) runner, so this produces the
-    # aarch64 .dmg referenced in the README. The build is ad-hoc signed, not
-    # notarized (no paid Apple Developer cert), which is expected.
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon — native on an arm64 runner.
+          - runner: macos-14
+            target: aarch64-apple-darwin
+          # Intel — native on an x86_64 runner.
+          - runner: macos-13
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache cargo
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.target }}
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -35,6 +45,8 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Both matrix jobs point at the same tag, so the first to finish creates
+      # the release and the second uploads its .dmg into it.
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -44,4 +56,4 @@ jobs:
           releaseName: "Quill ${{ github.ref_name }}"
           releaseDraft: false
           prerelease: false
-          args: ""
+          args: --target ${{ matrix.target }}

@@ -9,6 +9,16 @@ edition = "2021"
 name = "quill_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Size-optimized release build. The Rust binary dominates the bundle, so strip
+# symbols, enable LTO, and optimize for size. The backend does file IO + window
+# management (no hot loops), so trading a little codegen speed for size is free.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 149.8">
+<!-- Quill app icon. Background is a single clean rounded rect (rx 29.4) painted
+     twice: base linear gradient, then the radial highlight on the exact same
+     geometry. Corners meet the edges perfectly and the area outside is
+     transparent. The quill is unchanged from the original artwork. -->
+  <defs>
+    <linearGradient id="base" x1="17.7" x2="132.6" y1="10.6" y2="139.6" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2D2A75" offset="0"/>
+      <stop stop-color="#2B1561" offset=".526"/>
+      <stop stop-color="#1C0B2F" offset="1"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="75" cy="74.88" r="67.64" fx="58.29" fy="20.78" gradientTransform="matrix(1 0 0 .9846 0 1.02)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#413085" offset="0"/>
+      <stop stop-color="#291753" stop-opacity=".3" offset=".8587"/>
+      <stop stop-color="#1E1138" stop-opacity="0" offset="1"/>
+    </radialGradient>
+    <linearGradient id="feather" x1="74.22" x2="79.82" y1="35.53" y2="101.6" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff" offset=".3125"/>
+      <stop stop-color="#DCDAEA" offset="1"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="142" height="141.8" rx="29.4" ry="29.4" fill="url(#base)"/>
+  <rect x="4" y="4" width="142" height="141.8" rx="29.4" ry="29.4" fill="url(#glow)"/>
+  <path fill="url(#feather)" d="m94.5 49c13.5-2.3 16.2-8.7 19.2-14.5s8.7-8.6 8.9-8.7c-14.6-1.7-27.6 1-36.9 14.1 0.7-3.3 2.1-5.9 5.3-9.1-7.9 3.8-12.9 6.8-16.9 10.9-3.7 4.2-6 8.9-7 16.5-0.8-4.4-0.1-8 1.1-12.1-8.2 9.1-11.9 12.1-14.3 17.9-2.2 4.7-3 10.4-2.2 17.6-1.7-4-2.3-8.5-1.5-12.1-4.7 8.2-7.5 15.7-4.7 28.9 12.6-20.7 29.5-46.4 52.4-60.7l6.3-3.9c-18.5 10.6-34.3 30.4-51.9 58.9l-2.4 4.3-2.8 4.6 2.8-0.3c9.5-1.6 19.7-4.4 28.4-16.3-3.3 2.7-9.7 4-14.2 3.2 16.8-3 19.3-10.8 23.9-18.3 1.9-3.3 4.6-6.2 7.7-8.8-6.1 1.7-11.7 1.6-17.7 5.4 5.2-4.9 10-4.6 16-7.3 5.1-2.3 9.7-6.6 12.6-12.3-2 1.5-5.6 2.4-12.1 2.1z"/>
+  <path fill="#FFFFFF" d="m49.9 101.5c2.4-4.1 12.9-22.3 24.2-36.6 11.8-15 25.2-26.6 30.4-31.2-17.3 8.2-34.6 25.5-57.6 65.3-3.3 5.6-5.2 8.7-11.4 13.6v1.3c0 3.1-0.7 9.1-2.1 10.5l-0.5 0.7 0.4 0.5 5.6-9.4c-0.2-0.2-0.4-0.5-0.4-0.8 0-0.7 0.5-1.3 1.3-1.3 0.7 0 1.3 0.6 1.3 1.3s-0.6 1.2-1.3 1.2h-0.2l-5.5 9 0.5 0.3 0.2-0.5c0.6-1.4 5.1-5 9.9-7.8v-0.9c0.3-7.7 2.3-10.8 5.2-15.2zm18.8 20.3c-12.5 3.5-22.1 6.1-34 3.9l-0.3 0.1c13.6 3.7 24 1.4 33.3-1.1 14.3-3.7 30.3-10.6 49.4-5.5-15-6-27.6-3.7-48.4 2.6z"/>
+</svg>
