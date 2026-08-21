@@ -302,18 +302,53 @@ const katexMacros = {
   '\\C': '\\mathbb{C}',
 }
 
-// Live-typing math: the stock extension only parses $...$ from markdown files
-// (and its sole input rule wants "$$$..."). These make typing work:
-//   $E=mc^2$  -> inline math node (not for plain numbers like "$5")
+// Pandoc's dollar rules, so currency stays text: the opening $ needs a
+// non-space to its right, the closing $ a non-space to its left and no digit
+// to its right. "$50 and $100" and "$50-$100" survive as text; "$E=mc^2$"
+// and "$2x+3$" still become math. Exported for tests.
+export function matchInlineMathToken(src: string): { raw: string; latex: string } | undefined {
+  const match = src.match(/^\$([^\s$](?:[^$\n]*[^\s$])?)\$(?![$\d])/)
+  if (!match) return undefined
+  return { raw: match[0], latex: match[1].trim() }
+}
+
+// Digits without any letter or LaTeX command ("50", "3.99", "20,", "5-") are
+// prices or plain numbers, not math worth converting while typing.
+export function looksLikeCurrency(latex: string): boolean {
+  return /^\d/.test(latex) && !/[a-zA-Z\\]/.test(latex)
+}
+
+// The stock extension's markdown tokenizer grabs any "$...$" (turning
+// "$50 for lunch and $100" into math), and its sole input rule wants
+// "$$$...". These replace both:
+//   $E=mc^2$  -> inline math node (not currency like "$5-" or "$20,")
 //   $$..$$    -> block math node
 const QuillInlineMath = InlineMath.extend({
+  markdownTokenizer: {
+    name: 'inlineMath',
+    level: 'inline',
+    start: (src: string) => src.indexOf('$'),
+    tokenize: (src: string) => {
+      const token = matchInlineMathToken(src)
+      if (!token) return undefined
+      return { type: 'inlineMath', raw: token.raw, latex: token.latex }
+    },
+  },
   addInputRules() {
     return [
       new InputRule({
         find: /\$([^\s$](?:[^$\n]*[^\s$])?)\$$/,
         handler: ({ state, range, match }) => {
           const latex = match[1].trim()
-          if (!latex || /^\d+(?:[.,]\d+)?$/.test(latex)) return
+          if (!latex || looksLikeCurrency(latex)) return
+          // A digit right after the closing $ means a currency range like
+          // "$5-$10" being typed or edited, not math.
+          const $to = state.doc.resolve(range.to)
+          const after = $to.parent.textBetween(
+            $to.parentOffset,
+            Math.min($to.parentOffset + 1, $to.parent.content.size),
+          )
+          if (/\d/.test(after)) return
           // A "$" right before the match means the user is typing "$$...$$";
           // leave that to the block rule.
           if (range.from > 0 && state.doc.textBetween(range.from - 1, range.from) === '$') return
