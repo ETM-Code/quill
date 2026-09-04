@@ -1,5 +1,7 @@
 import type { Editor } from '@tiptap/core'
 import { TextSelection } from '@tiptap/pm/state'
+import { LogicalPosition } from '@tauri-apps/api/dpi'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { createQuillEditor, ensureGrammarsForDoc, getMarkdown, setMarkdown } from './editor-setup'
 import { FileOps } from './file-ops'
 import { selectStartupFiles } from './startup-files'
@@ -86,6 +88,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   const modifiedIndicator = document.getElementById('modified-indicator')!
   const wordCountEl = document.getElementById('word-count')!
   const editorEl = document.getElementById('editor')!
+  const titlebarEl = document.getElementById('titlebar')!
+
+  // macOS 27 can reject AppKit's performWindowDragWithEvent for an overlay
+  // titlebar. Move only this header by cursor delta instead; the editor never
+  // receives this listener, so text selection and its own drag/drop are intact.
+  titlebarEl.addEventListener('mousedown', async event => {
+    if (event.button !== 0) return
+    event.preventDefault()
+
+    try {
+      const win = getCurrentWindow()
+      const [position, scale] = await Promise.all([win.outerPosition(), win.scaleFactor()])
+      const startX = event.screenX
+      const startY = event.screenY
+
+      const move = (moveEvent: MouseEvent) => {
+        const x = position.x / scale + moveEvent.screenX - startX
+        const y = position.y / scale + moveEvent.screenY - startY
+        void win.setPosition(new LogicalPosition(x, y))
+      }
+      const stop = () => {
+        window.removeEventListener('mousemove', move)
+        window.removeEventListener('mouseup', stop)
+      }
+
+      window.addEventListener('mousemove', move)
+      window.addEventListener('mouseup', stop, { once: true })
+    } catch {
+      // Browser-based harness: no native window.
+    }
+  })
 
   // --- editor ---
   let fileOps: FileOps

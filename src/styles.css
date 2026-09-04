@@ -84,7 +84,6 @@ button {
   background: var(--bg-primary);
   user-select: none;
   -webkit-user-select: none;
-  -webkit-app-region: drag;
   flex-shrink: 0;
 }
 
