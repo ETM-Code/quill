@@ -1,17 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use url::form_urlencoded;
-
-#[derive(Default, Debug)]
-struct OpenFileState {
-    frontend_ready: bool,
-    pending_files: Vec<String>,
-}
 
 /// Dirty (unsaved changes) flags per window label; consulted on app quit.
 #[derive(Default)]
@@ -28,29 +23,13 @@ struct WindowPaths(Mutex<HashMap<String, String>>);
 
 static WINDOW_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
-fn collect_file_paths(files: &[PathBuf]) -> Vec<String> {
-    files
-        .iter()
-        .filter_map(|f| f.to_str().map(std::string::ToString::to_string))
-        .collect()
-}
+/// When the process started; a file opened this soon after launch replaces the
+/// blank startup window instead of sitting beside it.
+static STARTED: OnceLock<Instant> = OnceLock::new();
 
-fn drain_pending_files(state: &Mutex<OpenFileState>) -> Vec<String> {
-    let mut guard = state.lock().expect("open-file state mutex poisoned");
-    guard.frontend_ready = true;
-    std::mem::take(&mut guard.pending_files)
-}
-
-fn reset_state_for_new_window(state: &Mutex<OpenFileState>, files: &[PathBuf]) {
-    let mut guard = state.lock().expect("open-file state mutex poisoned");
-    guard.frontend_ready = false;
-    guard.pending_files = collect_file_paths(files);
-}
-
-#[tauri::command]
-fn register_frontend_ready(state: tauri::State<'_, Mutex<OpenFileState>>) -> Vec<String> {
-    drain_pending_files(&state)
-}
+/// Label of the blank window created at startup when no file had arrived yet.
+#[cfg(target_os = "macos")]
+static STARTUP_BLANK: Mutex<Option<String>> = Mutex::new(None);
 
 #[tauri::command]
 fn read_markdown_file(path: String) -> Result<String, String> {
@@ -94,10 +73,9 @@ fn update_recent_files(
     }
 }
 
-#[tauri::command]
 fn new_window(app: tauri::AppHandle) {
     let label = next_window_label();
-    create_editor_window(&app, &label, vec![], false, None);
+    create_editor_window(&app, &label, vec![], None);
 }
 
 #[tauri::command]
@@ -149,7 +127,7 @@ fn open_markdown_window(
         return Ok(());
     }
     let label = next_window_label();
-    create_editor_window(&app, &label, vec![PathBuf::from(path)], false, anchor.as_deref());
+    create_editor_window(&app, &label, vec![PathBuf::from(path)], anchor.as_deref());
     Ok(())
 }
 
@@ -274,18 +252,7 @@ fn build_window_url(files: &[PathBuf], anchor: Option<&str>) -> WebviewUrl {
     WebviewUrl::App("index.html".into())
 }
 
-fn create_editor_window(
-    app: &tauri::AppHandle,
-    label: &str,
-    files: Vec<PathBuf>,
-    reset_state: bool,
-    anchor: Option<&str>,
-) {
-    if reset_state {
-        let state = app.state::<Mutex<OpenFileState>>();
-        reset_state_for_new_window(&state, &files);
-    }
-
+fn create_editor_window(app: &tauri::AppHandle, label: &str, files: Vec<PathBuf>, anchor: Option<&str>) {
     let init_script = build_init_script(&files);
     let window_url = build_window_url(&files, anchor);
     let window = WebviewWindowBuilder::new(app, label, window_url)
@@ -310,7 +277,7 @@ fn create_editor_window(
         let app_handle = app.clone();
         let label = label.to_string();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            std::thread::sleep(Duration::from_secs(2));
             if let Some(window) = app_handle.get_webview_window(&label) {
                 if let Ok(false) = window.is_visible() {
                     let _ = window.show();
@@ -348,7 +315,7 @@ fn next_window_label() -> String {
 fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
     if files.is_empty() {
         if app.get_webview_window("main").is_none() {
-            create_editor_window(app, "main", vec![], true, None);
+            create_editor_window(app, "main", vec![], None);
         }
         return;
     }
@@ -356,12 +323,12 @@ fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
     if app.get_webview_window("main").is_none() {
         let mut iter = files.into_iter();
         if let Some(first) = iter.next() {
-            create_editor_window(app, "main", vec![first], true, None);
+            create_editor_window(app, "main", vec![first], None);
         }
 
         for file in iter {
             let label = next_window_label();
-            create_editor_window(app, &label, vec![file], false, None);
+            create_editor_window(app, &label, vec![file], None);
         }
         return;
     }
@@ -369,7 +336,7 @@ fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
     // Main window already exists: open each external file in a new window
     for file in files {
         let label = next_window_label();
-        create_editor_window(app, &label, vec![file], false, None);
+        create_editor_window(app, &label, vec![file], None);
     }
 }
 
@@ -612,7 +579,7 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) {
                     let _ = window.emit("menu-open-path", path);
                 } else {
                     let label = next_window_label();
-                    create_editor_window(app, &label, vec![PathBuf::from(path)], false, None);
+                    create_editor_window(app, &label, vec![PathBuf::from(path)], None);
                 }
                 return;
             }
@@ -660,8 +627,8 @@ fn any_window_dirty(app: &tauri::AppHandle) -> usize {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    STARTED.get_or_init(Instant::now);
     tauri::Builder::default()
-        .manage(Mutex::new(OpenFileState::default()))
         .manage(DirtyState::default())
         .manage(RecentFiles::default())
         .manage(WindowPaths::default())
@@ -669,12 +636,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
-            register_frontend_ready,
             read_markdown_file,
             write_image_file,
             set_window_dirty,
             update_recent_files,
-            new_window,
             set_window_path,
             open_markdown_window,
             open_local_path,
@@ -739,21 +704,32 @@ pub fn run() {
                         .into_iter()
                         .filter_map(|url| url.to_file_path().ok())
                         .collect::<Vec<_>>();
+                    let opened_any = !files.is_empty();
 
                     handle_file_associations(app, files);
+
+                    // A file that arrives just after launch (Finder double-click on a
+                    // cold start) replaces the blank window Ready already made.
+                    let blank = STARTUP_BLANK.lock().ok().and_then(|mut b| b.take());
+                    let early = STARTED
+                        .get()
+                        .is_some_and(|t| t.elapsed() < Duration::from_secs(3));
+                    if let (true, true, Some(label)) = (opened_any, early, blank) {
+                        if let Some(window) = app.get_webview_window(&label) {
+                            let _ = window.destroy();
+                        }
+                    }
                 }
                 tauri::RunEvent::Ready => {
-                    // On macOS, if no window exists yet (no files opened), create one
+                    // On macOS, if no window exists yet (no file arrived), create one.
                     #[cfg(target_os = "macos")]
                     {
-                        let app_handle = app.clone();
-                        std::thread::spawn(move || {
-                            // Small delay to let Opened fire first if there is one
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            if app_handle.get_webview_window("main").is_none() {
-                                handle_file_associations(&app_handle, vec![]);
+                        if app.webview_windows().keys().all(|l| l == "keepalive") {
+                            handle_file_associations(app, vec![]);
+                            if let Ok(mut blank) = STARTUP_BLANK.lock() {
+                                *blank = Some("main".to_string());
                             }
-                        });
+                        }
                     }
                 }
                 #[cfg(target_os = "macos")]
@@ -777,7 +753,7 @@ pub fn run() {
                             } else {
                                 next_window_label()
                             };
-                            create_editor_window(app, &label, vec![], label == "main", None);
+                            create_editor_window(app, &label, vec![], None);
                         }
                     }
                 }
@@ -795,45 +771,6 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn queues_files_when_frontend_not_ready() {
-        let state = Mutex::new(OpenFileState::default());
-        reset_state_for_new_window(
-            &state,
-            &vec![PathBuf::from("/tmp/a.md"), PathBuf::from("/tmp/b.md")],
-        );
-        let guard = state.lock().expect("state lock");
-        assert_eq!(
-            guard.pending_files,
-            vec!["/tmp/a.md".to_string(), "/tmp/b.md".to_string()]
-        );
-        assert!(!guard.frontend_ready);
-    }
-
-    #[test]
-    fn drains_pending_files_and_marks_frontend_ready() {
-        let state = Mutex::new(OpenFileState {
-            frontend_ready: false,
-            pending_files: vec!["/tmp/queued.md".to_string()],
-        });
-
-        let drained = drain_pending_files(&state);
-        assert_eq!(drained, vec!["/tmp/queued.md".to_string()]);
-
-        let guard = state.lock().expect("state lock");
-        assert!(guard.frontend_ready);
-        assert!(guard.pending_files.is_empty());
-    }
-
-    #[test]
-    fn collects_only_valid_utf8_file_paths() {
-        let files = vec![PathBuf::from("/tmp/one.md"), PathBuf::from("/tmp/two.md")];
-        assert_eq!(
-            collect_file_paths(&files),
-            vec!["/tmp/one.md".to_string(), "/tmp/two.md".to_string()]
-        );
-    }
 
     #[test]
     fn next_window_label_generates_expected_prefix() {
