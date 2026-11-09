@@ -24,7 +24,6 @@ import {
 } from './extensions'
 import { configureImages, localImagePath, isExternalSrc } from './images'
 
-import 'katex/dist/katex.min.css'
 
 declare global {
   interface Window {
@@ -98,8 +97,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   // --- editor ---
   let fileOps: FileOps
   let linkPopover: LinkPopover
-  let mathPopover: MathPopover
-  let mermaidPopover: MermaidPopover
+  // Math and diagram editors are built on first use (most documents never open them).
+  let mathPopoverInst: MathPopover | undefined
+  let mermaidPopoverInst: MermaidPopover | undefined
+  const mathPopover = {
+    show: (...args: Parameters<MathPopover['show']>) => (mathPopoverInst ??= new MathPopover(editor)).show(...args),
+  }
+  const mermaidPopover = {
+    show: (...args: Parameters<MermaidPopover['show']>) => (mermaidPopoverInst ??= new MermaidPopover(editor)).show(...args),
+  }
 
   const editor = createQuillEditor(editorEl, {
     onDocChanged: () => {
@@ -283,8 +289,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // --- chrome ---
   linkPopover = new LinkPopover(editor, url => void openLink(url), href => describeTarget(targetOf(href)))
-  mathPopover = new MathPopover(editor)
-  mermaidPopover = new MermaidPopover(editor)
   const bubbleMenu = new BubbleMenu(editor, () => linkPopover.showEditor())
   const slashMenu = new SlashMenu(editor, {
     // Inserting math from the slash menu drops straight into the LaTeX editor
@@ -318,7 +322,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     editor,
     container: document.getElementById('editor-container')!,
     getMarkdown: () => getMarkdown(editor),
-    setMarkdown: md => setMarkdown(editor, md),
+    setMarkdown: md => setMarkdown(editor, md, { undoable: true }),
     onDirty: () => fileOps.noteDocChanged(),
   })
   const outline = new Outline(editor)

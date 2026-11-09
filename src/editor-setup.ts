@@ -223,16 +223,32 @@ const LANGUAGE_LABELS: Array<[value: string, label: string]> = [
 // Size the language <select> to its selected label (selects default to the
 // width of their longest option, leaving the chevron stranded).
 let langMeasureEl: HTMLSpanElement | null = null
+// Widths per label: measuring forces a layout, so each label is measured once.
+const langWidths = new Map<string, number>()
+const LANGUAGE_LABEL = new Map(LANGUAGE_LABELS)
 
 function fitLanguageSelect(select: HTMLSelectElement): void {
-  if (!langMeasureEl) {
-    langMeasureEl = document.createElement('span')
-    langMeasureEl.style.cssText =
-      'position:fixed;visibility:hidden;white-space:pre;font-family:var(--font-sans);font-size:11.5px;'
-    document.body.appendChild(langMeasureEl)
+  const label = select.selectedOptions[0]?.textContent ?? ''
+  let width = langWidths.get(label)
+  if (width === undefined) {
+    if (!langMeasureEl) {
+      langMeasureEl = document.createElement('span')
+      langMeasureEl.style.cssText =
+        'position:fixed;visibility:hidden;white-space:pre;font-family:var(--font-sans);font-size:11.5px;'
+      document.body.appendChild(langMeasureEl)
+    }
+    langMeasureEl.textContent = label
+    width = Math.ceil(langMeasureEl.offsetWidth) + 28
+    langWidths.set(label, width)
   }
-  langMeasureEl.textContent = select.selectedOptions[0]?.textContent ?? ''
-  select.style.width = `${Math.ceil(langMeasureEl.offsetWidth) + 28}px`
+  select.style.width = `${width}px`
+}
+
+function languageOption(value: string, label: string): HTMLOptionElement {
+  const opt = document.createElement('option')
+  opt.value = value
+  opt.textContent = label
+  return opt
 }
 
 const QuillCodeBlock = CodeBlockLowlight.extend({
@@ -250,26 +266,36 @@ const QuillCodeBlock = CodeBlockLowlight.extend({
       const select = document.createElement('select')
       select.className = 'code-block-lang'
       select.title = 'Language'
-      for (const [value, label] of LANGUAGE_LABELS) {
-        const opt = document.createElement('option')
-        opt.value = value
-        opt.textContent = label
-        select.appendChild(opt)
+      // Only the selected <option> exists until the picker is used: a document
+      // with hundreds of code blocks would otherwise build ~35 options each.
+      let filled = false
+      const fillOptions = () => {
+        if (filled) return
+        filled = true
+        const current = select.value
+        const custom = [...select.options].filter(o => o.value.startsWith('raw:'))
+        select.textContent = ''
+        select.append(languageOption('', 'Plain text'), ...custom)
+        for (const [value, label] of LANGUAGE_LABELS) if (value) select.append(languageOption(value, label))
+        select.value = current
       }
+      select.addEventListener('mousedown', fillOptions)
+      select.addEventListener('focus', fillOptions)
       // Languages without a grammar keep their label (e.g. "hcl") rather than
       // showing "Plain text".
       const syncSelect = (language: unknown) => {
         const canonical = canonicalLanguage(language as string)
         const raw = typeof language === 'string' ? language.trim() : ''
         let value = canonical
+        let label = LANGUAGE_LABEL.get(canonical) ?? canonical
         if (!canonical && raw) {
           value = `raw:${raw}`
-          if (![...select.options].some(o => o.value === value)) {
-            const opt = document.createElement('option')
-            opt.value = value
-            opt.textContent = raw
-            select.insertBefore(opt, select.options[1] ?? null)
-          }
+          label = raw
+        }
+        if (![...select.options].some(o => o.value === value)) {
+          const opt = languageOption(value, label)
+          if (value.startsWith('raw:') && filled) select.insertBefore(opt, select.options[1] ?? null)
+          else select.appendChild(opt)
         }
         if (select.value !== value) {
           select.value = value

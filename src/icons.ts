@@ -41,7 +41,6 @@ export const icons = {
   rowBelow: svg('<rect x="3" y="3" width="18" height="8" rx="1.5"/><path d="M12 15v6"/><path d="m9 18 3 3 3-3"/>'),
   colBefore: svg('<rect x="13" y="3" width="8" height="18" rx="1.5"/><path d="M9 12H3"/><path d="m6 9-3 3 3 3"/>'),
   colAfter: svg('<rect x="3" y="3" width="8" height="18" rx="1.5"/><path d="M15 12h6"/><path d="m18 9 3 3-3 3"/>'),
-  headerRow: svg('<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 10h18"/><path d="M3 4h18v6H3z" fill="currentColor" stroke="none" opacity="0.3"/>'),
   rowDelete: svg('<rect x="3" y="9" width="12" height="6" rx="1.5"/><circle cx="19.5" cy="12" r="3.4"/><line x1="17.8" y1="12" x2="21.2" y2="12"/>'),
   colDelete: svg('<rect x="9" y="3" width="6" height="12" rx="1.5"/><circle cx="12" cy="19.5" r="3.4"/><line x1="10.3" y1="19.5" x2="13.7" y2="19.5"/>'),
   mermaid: svg('<rect x="3" y="3" width="6" height="4" rx="1"/><rect x="15" y="3" width="6" height="4" rx="1"/><rect x="9" y="17" width="6" height="4" rx="1"/><line x1="6" y1="7" x2="6" y2="12"/><line x1="18" y1="7" x2="18" y2="12"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="12" y1="12" x2="12" y2="17"/>'),

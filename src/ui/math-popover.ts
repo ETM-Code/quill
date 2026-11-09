@@ -1,6 +1,7 @@
 // Inline LaTeX editor with live preview, replacing the old native prompt().
 import type { Editor } from '@tiptap/core'
 import { Popover, type AnchorRect } from './popover'
+import { katexLoaded, loadKatex, renderMath } from '../math-render'
 
 type MathKind = 'inline' | 'block'
 
@@ -12,7 +13,6 @@ export class MathPopover {
   private hint: HTMLDivElement
   private kind: MathKind = 'inline'
   private pos = 0
-  private katexRender: ((latex: string, el: HTMLElement) => void) | null = null
 
   constructor(editor: Editor) {
     this.editor = editor
@@ -48,13 +48,6 @@ export class MathPopover {
     this.hint.textContent = 'Enter to save · Esc to cancel · empty to delete'
 
     this.popover.el.append(this.textarea, this.preview, this.hint)
-
-    void import('katex').then(katex => {
-      this.katexRender = (latex, el) => {
-        katex.default.render(latex, el, { throwOnError: false, displayMode: this.kind === 'block' })
-      }
-      if (this.popover.isVisible) this.renderPreview()
-    })
   }
 
   show(kind: MathKind, latex: string, pos: number, anchor: AnchorRect): void {
@@ -85,12 +78,11 @@ export class MathPopover {
       this.preview.textContent = ''
       return
     }
-    if (this.katexRender) {
-      this.katexRender(latex, this.preview)
-    } else {
-      this.preview.textContent = latex
-    }
+    // LaTeX source until KaTeX has loaded, then the rendered math.
+    renderMath(latex, this.preview, { throwOnError: false, displayMode: this.kind === 'block' })
     this.popover.reposition()
+    // The panel was sized for LaTeX source; size it for the typeset math once KaTeX arrives.
+    if (!katexLoaded()) void loadKatex().then(() => this.popover.isVisible && this.popover.reposition())
   }
 
   private commit(): void {

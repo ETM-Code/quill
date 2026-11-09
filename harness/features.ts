@@ -300,6 +300,8 @@ async function scenarioCodeBlock() {
   const clip = await page.evaluate(() => (window as any).__copied[0])
   check('copy button copies code', clip === 'print("hi")', JSON.stringify(clip))
 
+  // Language options are built on first focus/mousedown (as a user's click would).
+  await block.locator('.code-block-lang').focus()
   await block.locator('.code-block-lang').selectOption('rust')
   await page.waitForTimeout(400)
   check('language change persists to markdown', (await md(q)).includes('```rust'))
