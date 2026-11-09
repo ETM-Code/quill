@@ -1,7 +1,7 @@
 // Feature flow tests: bubble menu, link popover, math popover, slash menu,
 // find/replace, clipboard, save flows, draft recovery.
 // Run: bun harness/features.ts
-import { launchQuill, type Quill } from './driver'
+import { launchQuill, type Quill } from './gap-driver'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -288,6 +288,12 @@ async function scenarioCodeBlock() {
     ;(window as any).__copied = []
     const stub = (t: string) => { (window as any).__copied.push(t); return Promise.resolve() }
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: stub }, configurable: true })
+    // The copy helper tries execCommand('copy') first (WKWebView-safe).
+    const orig = document.execCommand.bind(document)
+    document.execCommand = (cmd: string, ...rest: any[]) => {
+      if (cmd === 'copy') (window as any).__copied.push((document.activeElement as HTMLTextAreaElement)?.value)
+      return orig(cmd, ...rest)
+    }
   })
   await block.locator('.code-block-copy').click()
   await page.waitForTimeout(150)

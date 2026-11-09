@@ -1,8 +1,11 @@
 // File lifecycle: open/save/save-as/new, dirty tracking, recent files,
-// crash-recovery drafts, and unsaved-changes guard on window close.
+// crash-recovery drafts, unsaved-changes guard on window close, line-ending
+// preservation, and detection of changes made to the file by other programs
+// (an agent rewriting the draft while it is open).
 import type { Editor } from '@tiptap/core'
 import { getMarkdown, setMarkdown } from './editor-setup'
 import { configureImages } from './images'
+import { setDocumentDir } from './markdown/clipboard'
 import { showToast } from './ui/toast'
 
 const RECENT_KEY = 'quill-recent-files'
@@ -40,6 +43,27 @@ function hashBytes(bytes: Uint8Array): string {
   return (h >>> 0).toString(16).padStart(8, '0')
 }
 
+/** How the file was encoded on disk, so a save writes it back the same way. */
+interface DiskFormat {
+  eol: '\n' | '\r\n'
+  bom: boolean
+}
+
+function decodeDisk(raw: string): { text: string; format: DiskFormat } {
+  const bom = raw.charCodeAt(0) === 0xfeff
+  const body = bom ? raw.slice(1) : raw
+  const crlf = (body.match(/\r\n/g) ?? []).length
+  const lf = (body.match(/\n/g) ?? []).length
+  // Mostly-CRLF files stay CRLF; mixed files are normalised to the majority.
+  const eol = crlf > 0 && crlf * 2 >= lf ? '\r\n' : '\n'
+  return { text: body.replace(/\r\n?/g, '\n'), format: { eol, bom } }
+}
+
+function encodeDisk(text: string, format: DiskFormat): string {
+  const body = format.eol === '\r\n' ? text.replace(/\r?\n/g, '\r\n') : text
+  return format.bom ? '\ufeff' + body : body
+}
+
 async function invokeBackend<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import('@tauri-apps/api/core')
   return invoke<T>(cmd, args)
@@ -52,6 +76,11 @@ export class FileOps {
   private dirty = false
   private draftTimer: ReturnType<typeof setTimeout> | undefined
   private saving = false
+  private format: DiskFormat = { eol: '\n', bom: false }
+  /** Exact file contents as last read or written by this window. */
+  private diskText: string | null = null
+  private checkingDisk = false
+  private externalChangePending = false
 
   constructor(editor: Editor, callbacks: FileOpsCallbacks) {
     this.editor = editor
@@ -69,6 +98,76 @@ export class FileOps {
     }
 
     this.refreshImageContext(null)
+
+    // Another program (often an agent) may rewrite the open file: check when
+    // the window comes back to the front.
+    window.addEventListener('focus', () => void this.checkDisk())
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') void this.checkDisk()
+    })
+  }
+
+  private async readDisk(path: string): Promise<string> {
+    try {
+      const { readTextFile } = await import('@tauri-apps/plugin-fs')
+      return await readTextFile(path)
+    } catch {
+      return await invokeBackend<string>('read_markdown_file', { path })
+    }
+  }
+
+  /** Current on-disk text, or null when it can't be read (deleted, moved). */
+  private async diskNow(): Promise<string | null> {
+    if (!this.path) return null
+    try {
+      return await this.readDisk(this.path)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Compare the file on disk with what this window last read or wrote. A
+   * clean buffer reloads silently; an edited one is never overwritten
+   * silently: the user picks Reload, or keeps their version (and Save asks).
+   */
+  async checkDisk(): Promise<void> {
+    if (!this.path || this.diskText === null || this.checkingDisk || this.saving) return
+    this.checkingDisk = true
+    try {
+      const now = await this.diskNow()
+      if (now === null || now === this.diskText) return
+      if (!this.dirty) {
+        await this.reloadFrom(now)
+        showToast(`Reloaded "${this.state.filename}": it changed on disk`, { kind: 'info' })
+        return
+      }
+      if (this.externalChangePending) return
+      this.externalChangePending = true
+      showToast(`"${this.state.filename}" changed on disk. Your unsaved edits are kept.`, {
+        kind: 'info',
+        duration: 15000,
+        action: { label: 'Reload', onClick: () => void this.reloadFromDisk() },
+      })
+    } finally {
+      this.checkingDisk = false
+    }
+  }
+
+  private async reloadFrom(raw: string): Promise<void> {
+    const { text, format } = decodeDisk(raw)
+    setMarkdown(this.editor, text)
+    this.format = format
+    this.diskText = raw
+    this.externalChangePending = false
+    this.setDirty(false)
+    this.emit()
+  }
+
+  /** Discard edits and load the current file contents. */
+  async reloadFromDisk(): Promise<void> {
+    const now = await this.diskNow()
+    if (now !== null) await this.reloadFrom(now)
   }
 
   /**
@@ -78,6 +177,7 @@ export class FileOps {
    * setMarkdown during a load) so the first render can resolve local images.
    */
   private refreshImageContext(path: string | null = this.path): void {
+    setDocumentDir(path ? getDirname(path) : null)
     configureImages({
       baseDir: path ? getDirname(path) : null,
       saver: async (bytes, ext) => {
@@ -218,9 +318,28 @@ export class FileOps {
     if (this.saving) return false
     this.saving = true
     try {
-      const markdown = getMarkdown(this.editor)
+      const markdown = encodeDisk(getMarkdown(this.editor), this.format)
 
       let targetPath = this.path
+      if (!saveAs && targetPath && this.diskText !== null) {
+        // Never silently overwrite a version someone else wrote meanwhile.
+        const now = await this.diskNow()
+        if (now !== null && now !== this.diskText && now !== markdown) {
+          const { ask } = await import('@tauri-apps/plugin-dialog')
+          const overwrite = await ask(
+            `"${this.state.filename}" was changed by another program since you opened it. Overwrite those changes with yours?`,
+            { title: 'File Changed on Disk', kind: 'warning', okLabel: 'Overwrite', cancelLabel: 'Cancel' },
+          )
+          if (!overwrite) {
+            showToast('Not saved. Reload to see the version on disk, or Save As to keep both.', {
+              kind: 'info',
+              duration: 10000,
+              action: { label: 'Reload', onClick: () => void this.reloadFromDisk() },
+            })
+            return false
+          }
+        }
+      }
       if (saveAs || !targetPath) {
         const { save } = await import('@tauri-apps/plugin-dialog')
         targetPath = await save({
@@ -232,6 +351,8 @@ export class FileOps {
 
       const { writeTextFile } = await import('@tauri-apps/plugin-fs')
       await writeTextFile(targetPath, markdown)
+      this.diskText = markdown
+      this.externalChangePending = false
 
       this.clearDraft()
       this.path = targetPath
@@ -269,17 +390,15 @@ export class FileOps {
   /** Load a file into this window (no discard confirmation; callers decide). */
   async loadPath(filePath: string): Promise<boolean> {
     try {
-      let content: string
-      try {
-        const { readTextFile } = await import('@tauri-apps/plugin-fs')
-        content = await readTextFile(filePath)
-      } catch {
-        content = await invokeBackend<string>('read_markdown_file', { path: filePath })
-      }
+      const raw = await this.readDisk(filePath)
+      const { text: content, format } = decodeDisk(raw)
 
       // Set the image base dir before rendering so local images resolve.
       this.refreshImageContext(filePath)
       setMarkdown(this.editor, content)
+      this.format = format
+      this.diskText = raw
+      this.externalChangePending = false
       this.path = filePath
       this.setDirty(false)
       this.touchRecent(filePath)
@@ -301,8 +420,10 @@ export class FileOps {
   async newFile(): Promise<void> {
     if (!(await this.confirmDiscard())) return
     this.clearDraft()
-    this.editor.commands.clearContent(true)
+    setMarkdown(this.editor, '')
     this.path = null
+    this.diskText = null
+    this.format = { eol: '\n', bom: false }
     this.refreshImageContext(null)
     this.setDirty(false)
     this.emit()
