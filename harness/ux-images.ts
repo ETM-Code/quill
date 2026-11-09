@@ -9,6 +9,8 @@ const FILES = { '/mock/doc/a.md': DOC, '/mock/doc/assets/cat.png': '<png>' }
 
 const imageAttrs = (q: any) => ed(q, e => { let a: any = null; e.state.doc.descendants((n: any) => { if (n.type.name === 'image' && !a) a = n.attrs }); return a })
 const imageCount = (q: any) => ed(q, e => { let c = 0; e.state.doc.descendants((n: any) => { if (n.type.name === 'image') c++ }); return c })
+// ProseMirror turns two clicks within 500 ms into a double-click (which opens the image).
+const reclick = async (q: any, img: any) => { await q.page.waitForTimeout(560); await img.click(); await q.page.waitForTimeout(200) }
 const popoverVisible = (q: any) => q.page.evaluate(() => { const p = document.querySelector('.image-popover') as HTMLElement | null; return !!p && getComputedStyle(p).display !== 'none' && getComputedStyle(p).visibility !== 'hidden' })
 
 export async function run(): Promise<Result[]> {
@@ -31,7 +33,7 @@ export async function run(): Promise<Result[]> {
       await q.page.waitForTimeout(100)
       s.check('alt edit saved to markdown', (await md(q)).includes('![A ginger cat](assets/cat.png)'), await md(q))
 
-      await img.click(); await q.page.waitForTimeout(200)
+      await reclick(q, img)
       await q.page.locator('.image-popover-size', { hasText: 'S' }).click()
       await q.page.waitForTimeout(100)
       const a1 = await imageAttrs(q)
@@ -45,7 +47,7 @@ export async function run(): Promise<Result[]> {
       await q.page.waitForTimeout(150)
       let calls = await uxCalls(q)
       s.check('Open → open_local_path(abs)', calls.some(c => c.cmd === 'open_local_path' && c.args.path === '/mock/doc/assets/cat.png'), calls)
-      await img.click(); await q.page.waitForTimeout(200)
+      await reclick(q, img)
       await q.page.locator('.image-popover button[title="Show in Finder"]').click()
       await q.page.waitForTimeout(150)
       calls = await uxCalls(q)
@@ -62,7 +64,7 @@ export async function run(): Promise<Result[]> {
     })
 
     await s.step('resize handle', async () => {
-      await img.click(); await q.page.waitForTimeout(150)
+      await reclick(q, img)
       await q.page.keyboard.press('Escape')
       const box = (await q.page.locator('.quill-image-handle').first().boundingBox())!
       await q.page.mouse.move(box.x + 5, box.y + 5)
@@ -75,7 +77,7 @@ export async function run(): Promise<Result[]> {
     })
 
     await s.step('delete', async () => {
-      await img.click(); await q.page.waitForTimeout(200)
+      await reclick(q, img)
       await q.page.locator('.image-popover button[title="Delete image"]').click()
       await q.page.waitForTimeout(100)
       s.check('delete removes image', await imageCount(q) === 0)

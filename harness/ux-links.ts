@@ -69,8 +69,12 @@ export async function run(): Promise<Result[]> {
     s.check('local file opens with default app', c2?.cmd === 'open_local_path' && c2.args.path === '/mock/doc/report v2.pdf', c2)
 
     await link('./tool.sh').click({ modifiers: ['Meta'] })
-    await page.waitForTimeout(250)
-    const shCalls = (await uxCalls(q)).filter(c => c.cmd === 'open_local_path' && c.args.path === '/mock/doc/tool.sh')
+    // The confirm dialog resolves asynchronously; allow for a loaded machine.
+    let shCalls: Array<{ cmd: string; args: any }> = []
+    for (let i = 0; i < 20 && shCalls.length < 2; i++) {
+      await page.waitForTimeout(150)
+      shCalls = (await uxCalls(q)).filter(c => c.cmd === 'open_local_path' && c.args.path === '/mock/doc/tool.sh')
+    }
     s.check('script asks before opening (confirmed second call)', shCalls.length === 2 && shCalls[1].args.confirmed === true, shCalls)
 
     await link('./nope.md').click({ modifiers: ['Meta'] })

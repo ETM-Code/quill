@@ -47,9 +47,11 @@ export class ImagePopover {
       if (e.key === 'Enter') {
         e.preventDefault()
         e.stopPropagation()
+        const pos = this.pos
         this.commitAlt()
         this.popover.hide()
         this.editor.commands.focus()
+        if (pos != null) this.keepSelected(pos)
       }
     })
     this.alt.addEventListener('blur', () => this.commitAlt())
@@ -139,6 +141,26 @@ export class ImagePopover {
 
   hide(): void {
     this.popover.hide()
+  }
+
+  /**
+   * Moving focus from the alt input back into the editor makes WebKit
+   * re-sync the DOM selection, which can land on the start of the document
+   * and replace the image's node selection after a delay. Re-assert it once
+   * the focus change has settled, so the image stays selected (and clickable).
+   */
+  private keepSelected(pos: number): void {
+    const restore = (): void => {
+      if (this.editor.isDestroyed || this.popover.isVisible || !this.nodeAt(pos)) return
+      const { selection, doc } = this.editor.state
+      if (selection instanceof NodeSelection && selection.from === pos) return
+      this.editor.view.dispatch(this.editor.state.tr.setSelection(NodeSelection.create(doc, pos)).setMeta('addToHistory', false))
+    }
+    requestAnimationFrame(() => {
+      restore()
+      requestAnimationFrame(restore)
+    })
+    setTimeout(restore, 80)
   }
 
   private syncSizes(width: unknown): void {
