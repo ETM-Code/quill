@@ -615,21 +615,27 @@ export function getMarkdown(editor: Editor): string {
 }
 
 /**
- * Replace the document from a markdown string (load/open path). The load is
- * not undoable: history is reset, so Cmd+Z can't bring back the previous
- * file's content under the new file's name.
+ * Replace the document from a markdown string. For loading a file (the
+ * default) the load is not undoable: history is reset, so Cmd+Z can't bring
+ * back the previous file's content under the new file's name. Pass
+ * `{ undoable: true }` for in-document rewrites (e.g. applying source-view
+ * edits) to make it one undo step and keep earlier history.
  */
-export function setMarkdown(editor: Editor, markdown: string): void {
+export function setMarkdown(editor: Editor, markdown: string, opts: { undoable?: boolean } = {}): void {
   const { doc, info } = getCodec(editor.schema).parse(markdown)
   loads.set(editor, info)
   const view = editor.view
   // Dispatch so listeners (word count, dirty state, plugins) see the change...
   const tr = view.state.tr
     .replaceWith(0, view.state.doc.content.size, doc.content)
-    .setMeta('addToHistory', false)
     .setMeta('quillLoad', true)
+  if (!opts.undoable) tr.setMeta('addToHistory', false)
   tr.setSelection(TextSelection.atStart(tr.doc))
   view.dispatch(tr)
+  if (opts.undoable) {
+    ensureGrammarsForDoc(editor)
+    return
+  }
   // ...then reset only the undo history (re-adding the history plugin
   // re-initialises its state; every other plugin keeps its state).
   const plugins = view.state.plugins
