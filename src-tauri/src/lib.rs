@@ -21,6 +21,11 @@ struct DirtyState(Mutex<HashMap<String, bool>>);
 #[derive(Default)]
 struct RecentFiles(Mutex<Vec<String>>);
 
+/// Document path shown in each window (by label), so following a link to a
+/// file that is already open focuses that window instead of opening a twin.
+#[derive(Default)]
+struct WindowPaths(Mutex<HashMap<String, String>>);
+
 static WINDOW_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 fn collect_file_paths(files: &[PathBuf]) -> Vec<String> {
@@ -92,7 +97,153 @@ fn update_recent_files(
 #[tauri::command]
 fn new_window(app: tauri::AppHandle) {
     let label = next_window_label();
-    create_editor_window(&app, &label, vec![], false);
+    create_editor_window(&app, &label, vec![], false, None);
+}
+
+#[tauri::command]
+fn set_window_path(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, WindowPaths>,
+    path: Option<String>,
+) {
+    let mut guard = state.0.lock().expect("window paths mutex poisoned");
+    match path {
+        Some(p) => guard.insert(window.label().to_string(), canonical_string(&p)),
+        None => guard.remove(window.label()),
+    };
+}
+
+fn canonical_string(path: &str) -> String {
+    std::fs::canonicalize(path)
+        .ok()
+        .and_then(|p| p.to_str().map(ToString::to_string))
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// Open a markdown file from a link or drop: focus the window that already
+/// shows it, else open a new window. `anchor` (a heading slug) is scrolled to.
+#[tauri::command]
+fn open_markdown_window(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WindowPaths>,
+    path: String,
+    anchor: Option<String>,
+) -> Result<(), String> {
+    if !std::path::Path::new(&path).is_file() {
+        return Err(format!("File not found: {path}"));
+    }
+    let wanted = canonical_string(&path);
+    let existing = {
+        let guard = state.0.lock().expect("window paths mutex poisoned");
+        guard
+            .iter()
+            .find(|(_, p)| **p == wanted)
+            .map(|(label, _)| label.clone())
+    };
+    if let Some(window) = existing.and_then(|label| app.get_webview_window(&label)) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        if let Some(anchor) = anchor {
+            let _ = window.emit("scroll-to-anchor", anchor);
+        }
+        return Ok(());
+    }
+    let label = next_window_label();
+    create_editor_window(&app, &label, vec![PathBuf::from(path)], false, anchor.as_deref());
+    Ok(())
+}
+
+/// Extensions that run code when "opened"; links to these need confirmation.
+fn is_executable_like(path: &std::path::Path) -> bool {
+    const RISKY: &[&str] = &[
+        "app", "command", "tool", "sh", "bash", "zsh", "csh", "py", "rb", "pl", "terminal",
+        "pkg", "mpkg", "dmg", "jar", "scpt", "applescript", "workflow", "action", "exe", "bat",
+        "cmd", "ps1", "webloc", "inetloc", "fileloc",
+    ];
+    let ext_risky = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| RISKY.contains(&e.to_ascii_lowercase().as_str()));
+    #[cfg(unix)]
+    let exec_bit = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    };
+    #[cfg(not(unix))]
+    let exec_bit = false;
+    ext_risky || exec_bit
+}
+
+/// Open a local file or folder with its default app (folders open in
+/// Finder). Programs and scripts are refused unless `confirmed` (the
+/// frontend asks the user first).
+#[tauri::command]
+fn open_local_path(app: tauri::AppHandle, path: String, confirmed: bool) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let target = std::path::Path::new(&path);
+    if !target.exists() {
+        return Err(format!("File not found: {path}"));
+    }
+    if !confirmed && is_executable_like(target) {
+        return Err("needs-confirmation".to_string());
+    }
+    app.opener()
+        .open_path(path.clone(), None::<&str>)
+        .map_err(|e| format!("failed to open {path}: {e}"))
+}
+
+/// Show a file selected in Finder.
+#[tauri::command]
+fn reveal_local_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|e| format!("failed to reveal {path}: {e}"))
+}
+
+/// Copy a dropped file into `<doc_dir>/assets/`, keeping its name. Reuses an
+/// identical existing copy; otherwise picks `name-1.ext`, `name-2.ext`, ...
+/// Returns the markdown-relative path (`assets/<name>`).
+#[tauri::command]
+fn import_asset(source: String, doc_dir: String) -> Result<String, String> {
+    let src = PathBuf::from(&source);
+    let bytes = std::fs::read(&src).map_err(|e| format!("failed to read {source}: {e}"))?;
+    let assets = PathBuf::from(&doc_dir).join("assets");
+    std::fs::create_dir_all(&assets)
+        .map_err(|e| format!("failed to create {}: {e}", assets.display()))?;
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("image")
+        .to_string();
+    let ext = src.extension().and_then(|s| s.to_str()).map(ToString::to_string);
+    for n in 0..1000 {
+        let name = match (&ext, n) {
+            (Some(ext), 0) => format!("{stem}.{ext}"),
+            (Some(ext), n) => format!("{stem}-{n}.{ext}"),
+            (None, 0) => stem.clone(),
+            (None, n) => format!("{stem}-{n}"),
+        };
+        let candidate = assets.join(&name);
+        match std::fs::read(&candidate) {
+            Ok(existing) if existing == bytes => return Ok(format!("assets/{name}")),
+            Ok(_) => {}
+            Err(_) => {
+                std::fs::write(&candidate, &bytes)
+                    .map_err(|e| format!("failed to write {}: {e}", candidate.display()))?;
+                return Ok(format!("assets/{name}"));
+            }
+        }
+    }
+    Err("too many files with the same name in assets/".to_string())
+}
+
+/// Native print dialog for the calling window (Save as PDF lives there).
+#[tauri::command]
+fn print_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.print().map_err(|e| format!("print failed: {e}"))
 }
 
 fn build_init_script(files: &[PathBuf]) -> String {
@@ -109,25 +260,34 @@ fn build_init_script(files: &[PathBuf]) -> String {
     format!("window.openedFiles = [{}];", files_js)
 }
 
-fn build_window_url(files: &[PathBuf]) -> WebviewUrl {
+fn build_window_url(files: &[PathBuf], anchor: Option<&str>) -> WebviewUrl {
     if let Some(path) = files.first().and_then(|f| f.to_str()) {
-        let query = form_urlencoded::Serializer::new(String::new())
-            .append_pair("open", path)
-            .finish();
+        let mut query = form_urlencoded::Serializer::new(String::new());
+        query.append_pair("open", path);
+        if let Some(anchor) = anchor {
+            query.append_pair("anchor", anchor);
+        }
+        let query = query.finish();
         return WebviewUrl::App(format!("index.html?{query}").into());
     }
 
     WebviewUrl::App("index.html".into())
 }
 
-fn create_editor_window(app: &tauri::AppHandle, label: &str, files: Vec<PathBuf>, reset_state: bool) {
+fn create_editor_window(
+    app: &tauri::AppHandle,
+    label: &str,
+    files: Vec<PathBuf>,
+    reset_state: bool,
+    anchor: Option<&str>,
+) {
     if reset_state {
         let state = app.state::<Mutex<OpenFileState>>();
         reset_state_for_new_window(&state, &files);
     }
 
     let init_script = build_init_script(&files);
-    let window_url = build_window_url(&files);
+    let window_url = build_window_url(&files, anchor);
     let window = WebviewWindowBuilder::new(app, label, window_url)
         .initialization_script(&init_script)
         .title("Quill")
@@ -188,7 +348,7 @@ fn next_window_label() -> String {
 fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
     if files.is_empty() {
         if app.get_webview_window("main").is_none() {
-            create_editor_window(app, "main", vec![], true);
+            create_editor_window(app, "main", vec![], true, None);
         }
         return;
     }
@@ -196,12 +356,12 @@ fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
     if app.get_webview_window("main").is_none() {
         let mut iter = files.into_iter();
         if let Some(first) = iter.next() {
-            create_editor_window(app, "main", vec![first], true);
+            create_editor_window(app, "main", vec![first], true, None);
         }
 
         for file in iter {
             let label = next_window_label();
-            create_editor_window(app, &label, vec![file], false);
+            create_editor_window(app, &label, vec![file], false, None);
         }
         return;
     }
@@ -209,7 +369,7 @@ fn handle_file_associations(app: &tauri::AppHandle, files: Vec<PathBuf>) {
     // Main window already exists: open each external file in a new window
     for file in files {
         let label = next_window_label();
-        create_editor_window(app, &label, vec![file], false);
+        create_editor_window(app, &label, vec![file], false, None);
     }
 }
 
@@ -293,6 +453,12 @@ fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
                 .build(app)?,
         )
         .separator()
+        .item(
+            &MenuItemBuilder::with_id("print", "Print / Export PDF…")
+                .accelerator("CmdOrCtrl+P")
+                .build(app)?,
+        )
+        .separator()
         .close_window()
         .build()?;
 
@@ -312,6 +478,11 @@ fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .separator()
         .cut()
         .copy()
+        .item(
+            &MenuItemBuilder::with_id("copy-plain", "Copy as Plain Text")
+                .accelerator("Alt+Shift+CmdOrCtrl+C")
+                .build(app)?,
+        )
         .paste()
         .select_all()
         .separator()
@@ -327,6 +498,59 @@ fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         )
         .build()?;
 
+    // Format and View menus mostly mirror editor keymaps: the web view sees
+    // key events first, so a shortcut the editor handles never reaches the
+    // menu. The items make the shortcuts discoverable and clickable.
+    let item = |id: &str, label: &str, accel: Option<&str>| {
+        let b = MenuItemBuilder::with_id(id, label);
+        match accel {
+            Some(a) => b.accelerator(a).build(app),
+            None => b.build(app),
+        }
+    };
+    let heading_menu = SubmenuBuilder::new(app, "Heading")
+        .item(&item("format-paragraph", "Paragraph", Some("CmdOrCtrl+0"))?)
+        .separator()
+        .item(&item("format-h1", "Heading 1", Some("CmdOrCtrl+1"))?)
+        .item(&item("format-h2", "Heading 2", Some("CmdOrCtrl+2"))?)
+        .item(&item("format-h3", "Heading 3", Some("CmdOrCtrl+3"))?)
+        .item(&item("format-h4", "Heading 4", Some("CmdOrCtrl+4"))?)
+        .item(&item("format-h5", "Heading 5", Some("CmdOrCtrl+5"))?)
+        .item(&item("format-h6", "Heading 6", Some("CmdOrCtrl+6"))?)
+        .build()?;
+    let insert_menu = SubmenuBuilder::new(app, "Insert")
+        .item(&item("insert-table", "Table", Some("Alt+CmdOrCtrl+T"))?)
+        .item(&item("insert-image", "Image…", None)?)
+        .item(&item("insert-rule", "Divider", None)?)
+        .item(&item("insert-math", "Math Block", None)?)
+        .item(&item("insert-mermaid", "Mermaid Diagram", None)?)
+        .build()?;
+    let format_menu = SubmenuBuilder::new(app, "Format")
+        .item(&item("format-bold", "Bold", Some("CmdOrCtrl+B"))?)
+        .item(&item("format-italic", "Italic", Some("CmdOrCtrl+I"))?)
+        .item(&item("format-underline", "Underline", Some("CmdOrCtrl+U"))?)
+        .item(&item("format-strike", "Strikethrough", Some("Shift+CmdOrCtrl+X"))?)
+        .item(&item("format-highlight", "Highlight", Some("Shift+CmdOrCtrl+H"))?)
+        .item(&item("format-code", "Inline Code", Some("CmdOrCtrl+E"))?)
+        .item(&item("format-math", "Inline Math", Some("Shift+CmdOrCtrl+M"))?)
+        .item(&item("format-link", "Link…", Some("CmdOrCtrl+K"))?)
+        .item(&item("format-clear", "Clear Formatting", Some("CmdOrCtrl+\\"))?)
+        .separator()
+        .item(&heading_menu)
+        .item(&item("format-bullet", "Bulleted List", Some("Shift+CmdOrCtrl+8"))?)
+        .item(&item("format-ordered", "Numbered List", Some("Shift+CmdOrCtrl+7"))?)
+        .item(&item("format-task", "Task List", Some("Shift+CmdOrCtrl+9"))?)
+        .item(&item("format-quote", "Quote", Some("Shift+CmdOrCtrl+B"))?)
+        .item(&item("format-codeblock", "Code Block", Some("Alt+CmdOrCtrl+C"))?)
+        .separator()
+        .item(&insert_menu)
+        .build()?;
+
+    let view_menu = SubmenuBuilder::new(app, "View")
+        .item(&item("toggle-source", "Markdown Source", Some("CmdOrCtrl+/"))?)
+        .item(&item("toggle-outline", "Outline", Some("Shift+CmdOrCtrl+O"))?)
+        .build()?;
+
     let window_menu = SubmenuBuilder::new(app, "Window")
         .minimize()
         .maximize()
@@ -335,7 +559,14 @@ fn install_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .build()?;
 
     let menu = MenuBuilder::new(app)
-        .items(&[&app_menu, &file_menu, &edit_menu, &window_menu])
+        .items(&[
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &format_menu,
+            &view_menu,
+            &window_menu,
+        ])
         .build()?;
     app.set_menu(menu)?;
     Ok(())
@@ -381,7 +612,7 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) {
                     let _ = window.emit("menu-open-path", path);
                 } else {
                     let label = next_window_label();
-                    create_editor_window(app, &label, vec![PathBuf::from(path)], false);
+                    create_editor_window(app, &label, vec![PathBuf::from(path)], false, None);
                 }
                 return;
             }
@@ -433,6 +664,7 @@ pub fn run() {
         .manage(Mutex::new(OpenFileState::default()))
         .manage(DirtyState::default())
         .manage(RecentFiles::default())
+        .manage(WindowPaths::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -442,7 +674,13 @@ pub fn run() {
             write_image_file,
             set_window_dirty,
             update_recent_files,
-            new_window
+            new_window,
+            set_window_path,
+            open_markdown_window,
+            open_local_path,
+            reveal_local_path,
+            import_asset,
+            print_window
         ])
         .on_menu_event(|app, event| {
             handle_menu_event(app, event.id().as_ref());
@@ -452,6 +690,12 @@ pub fn run() {
                 let state = window.app_handle().state::<DirtyState>();
                 let mut guard = state.0.lock().expect("dirty state mutex poisoned");
                 guard.remove(window.label());
+                let paths = window.app_handle().state::<WindowPaths>();
+                paths
+                    .0
+                    .lock()
+                    .expect("window paths mutex poisoned")
+                    .remove(window.label());
             }
         })
         .setup(|app| {
@@ -533,7 +777,7 @@ pub fn run() {
                             } else {
                                 next_window_label()
                             };
-                            create_editor_window(app, &label, vec![], label == "main");
+                            create_editor_window(app, &label, vec![], label == "main", None);
                         }
                     }
                 }
