@@ -159,6 +159,28 @@ export async function runInteract(log: (s: string) => void = console.log): Promi
     await q.close()
   })
 
+  await scenario('UX integration: highlight mark, image width, %20 paths', async () => {
+    const q = await launchQuill({ files: { '/m/doc/a.md': 'a ==hi== b\n\n![cat](img/local%20shot.png)\n' }, open: '/m/doc/a.md' })
+    const { page } = q
+    await page.waitForTimeout(400)
+    const marks = await page.evaluate(() => JSON.stringify((window as any).quillDebug.editor.getJSON()))
+    check('==x== loads as the highlight mark', marks.includes('"highlight"'), marks.slice(0, 200))
+    const src = await page.evaluate(() => { let s = ''; (window as any).quillDebug.editor.state.doc.descendants((n: any) => { if (n.type.name === 'image') s = n.attrs.src }); return s })
+    check('%20 path kept', src === 'img/local%20shot.png', src)
+    await page.evaluate(() => {
+      const e = (window as any).quillDebug.editor
+      e.state.doc.descendants((n: any, pos: number) => {
+        if (n.type.name === 'image') e.view.dispatch(e.state.tr.setNodeMarkup(pos, undefined, { ...n.attrs, width: 240 }))
+      })
+    })
+    const out = await md(q)
+    check('width saved as <img>', out === 'a ==hi== b\n\n<img src="img/local%20shot.png" alt="cat" width="240">\n', JSON.stringify(out))
+    await page.evaluate((m: string) => (window as any).quillDebug.setMarkdown(m), out)
+    const w = await page.evaluate(() => { let w = null; (window as any).quillDebug.editor.state.doc.descendants((n: any) => { if (n.type.name === 'image') w = n.attrs.width }); return w })
+    check('width parsed back onto the image node', w === 240, String(w))
+    await q.close()
+  })
+
   // ---- typing ---------------------------------------------------------------
 
   await scenario('B7 no smart typography', async () => {

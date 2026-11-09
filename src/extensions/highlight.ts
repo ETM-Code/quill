@@ -12,10 +12,6 @@ declare module '@tiptap/core' {
   }
 }
 
-// ==x== with no space just inside either delimiter, not part of a longer run
-// of "=" (so "a === b" and "x == y" stay text).
-const HIGHLIGHT_RE = /^==(?!=)(?=\S)([^\n]*?\S)==(?!=)/
-
 export const Highlight = Mark.create({
   name: 'highlight',
 
@@ -36,21 +32,5 @@ export const Highlight = Mark.create({
     }
   },
 
-  // Read at runtime by @tiptap/markdown.
-  ...({
-    markdownTokenName: 'highlight',
-    markdownTokenizer: {
-      name: 'highlight',
-      level: 'inline',
-      start: (src: string) => src.indexOf('=='),
-      tokenize: (src: string, _tokens: unknown, helper: { inlineTokens: (s: string) => unknown[] }) => {
-        const m = HIGHLIGHT_RE.exec(src)
-        if (!m) return undefined
-        return { type: 'highlight', raw: m[0], text: m[1], tokens: helper.inlineTokens(m[1]) }
-      },
-    },
-    parseMarkdown: (token: { tokens?: unknown[] }, helpers: any) =>
-      helpers.applyMark('highlight', helpers.parseInline(token.tokens || [])),
-    renderMarkdown: (node: unknown, h: any) => `==${h.renderChildren(node)}==`,
-  } as object),
+  // Markdown (==x==) is parsed by markdown-it-mark and written by src/markdown.
 })

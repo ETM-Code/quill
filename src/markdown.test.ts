@@ -119,6 +119,36 @@ describe('front matter and verbatim blocks', () => {
   })
 })
 
+describe('images', () => {
+  const img = (attrs: Record<string, unknown>) => docOf(schema.nodes.paragraph.create(null, schema.nodes.image.create(attrs)))
+  test('width round-trips through <img>', () => {
+    const md = ser(img({ src: 'assets/a b.png', alt: 'A "q"', width: 240 }))
+    expect(md).toBe('<img src="assets/a b.png" alt="A &quot;q&quot;" width="240">\n')
+    const back = codec.parse(md).doc.firstChild!.firstChild!
+    expect(back.type.name).toBe('image')
+    expect(back.attrs).toMatchObject({ src: 'assets/a b.png', alt: 'A "q"', width: 240 })
+    expect(fresh(md)).toBe(md)
+    const inline = fresh('text <img src="x.png" width="20"> more\n')
+    expect(inline).toBe('text <img src="x.png" width="20"> more\n')
+  })
+  test('%20-encoded and spaced paths round-trip', () => {
+    const md = ser(img({ src: 'img/local%20shot.png', alt: null }))
+    expect(md).toBe('![](img/local%20shot.png)\n')
+    expect(codec.parse(md).doc.firstChild!.firstChild!.attrs.src).toBe('img/local%20shot.png')
+    const spaced = ser(img({ src: 'img/local shot.png', alt: 'x' }))
+    expect(spaced).toBe('![x](<img/local shot.png>)\n')
+  })
+})
+
+describe('highlight', () => {
+  test('==x== is highlight, === is text', () => {
+    expect(fresh('a ==hi== b\n')).toBe('a ==hi== b\n')
+    expect(codec.parse('a ==hi== b\n').doc.firstChild!.child(1).marks[0].type.name).toBe('highlight')
+    expect(codec.parse('if a === b and x == y\n').doc.firstChild!.firstChild!.marks.length).toBe(0)
+    expect(fresh('if a === b and x == y\n')).toBe('if a === b and x == y\n')
+  })
+})
+
 describe('clipboard helpers', () => {
   test('TSV and CSV detection', () => {
     expect(parseDelimited('a\tb\n1\t2\n')).toEqual([['a', 'b'], ['1', '2']])

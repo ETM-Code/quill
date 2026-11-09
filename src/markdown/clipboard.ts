@@ -21,20 +21,30 @@ import { htmlToText, sanitizeHtmlSync } from './sanitize'
 /**
  * Copy text from a click handler. WKWebView often rejects
  * navigator.clipboard (no permission, or the user activation is gone by the
- * time the promise runs), so try the synchronous execCommand path first while
- * the click's activation is live, then fall back to the async API.
+ * time the promise settles), and a fallback started after that rejection has
+ * lost the activation too. So start the async API and, in the same tick,
+ * run the synchronous execCommand path; either one succeeding is enough
+ * (both write the same text).
  */
 export async function copyText(text: string): Promise<boolean> {
-  if (copyTextSync(text)) return true
+  let pending: Promise<void> | null = null
   try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
+    pending = navigator.clipboard?.writeText ? navigator.clipboard.writeText(text) : null
   } catch {
-    // fall through
+    pending = null
   }
-  return false
+  const syncOk = copyTextSync(text)
+  if (syncOk) {
+    pending?.catch(() => {})
+    return true
+  }
+  if (!pending) return false
+  try {
+    await pending
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Hidden-textarea + execCommand('copy'); must run inside a user gesture. */
@@ -46,10 +56,8 @@ export function copyTextSync(text: string): boolean {
   ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none;'
   document.body.appendChild(ta)
   let ok = false
-  // Make sure the copy event carries exactly our text, even if something
-  // else (the editor) would handle it.
+  // Make sure the copy event carries exactly our text (text/plain only).
   const onCopy = (e: ClipboardEvent) => {
-    e.stopImmediatePropagation()
     if (e.clipboardData) {
       e.preventDefault()
       e.clipboardData.setData('text/plain', text)

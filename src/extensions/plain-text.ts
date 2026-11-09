@@ -4,11 +4,16 @@
 // become tab-separated lines (spreadsheet-friendly), math becomes its LaTeX,
 // images their alt text, code its raw text. Only text/plain is written.
 import type { Editor } from '@tiptap/core'
+import { copyText } from '../markdown/clipboard'
 import type { Fragment, Node as PMNode } from '@tiptap/pm/model'
 
 function inlineNodeText(child: PMNode): string {
   if (child.isText) return child.text ?? ''
   if (child.type.name === 'hardBreak') return '\n'
+  // Markdown-layer inline nodes (src/markdown/nodes.ts) are leaves with no text.
+  if (child.type.name === 'softBreak') return ' '
+  if (child.type.name === 'htmlInline') return (child.attrs.html as string) ?? ''
+  if (child.type.name === 'footnoteRef') return `[${child.attrs.label as string}]`
   if (child.type.name === 'inlineMath') return (child.attrs.latex as string) ?? ''
   if (child.type.name === 'image') return (child.attrs.alt as string | null) ?? ''
   if (child.isInline) return child.textContent
@@ -122,36 +127,9 @@ export function selectionPlainText(editor: Editor): string {
  * forced to plain text.
  */
 export function writePlainTextToClipboard(text: string): void {
-  const fallback = () => {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.setAttribute('readonly', '')
-    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0'
-    const active = document.activeElement as HTMLElement | null
-    document.body.appendChild(ta)
-    ta.select()
-    const onCopy = (e: ClipboardEvent) => {
-      e.clipboardData?.setData('text/plain', text)
-      e.preventDefault()
-    }
-    document.addEventListener('copy', onCopy, true)
-    try {
-      document.execCommand('copy')
-    } finally {
-      document.removeEventListener('copy', onCopy, true)
-      ta.remove()
-      active?.focus()
-    }
-  }
-  try {
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).catch(fallback)
-      return
-    }
-  } catch {
-    // fall through
-  }
-  fallback()
+  // Shared helper: synchronous execCommand path first (works inside the
+  // user gesture in WKWebView), then navigator.clipboard.
+  void copyText(text)
 }
 
 export function copyAsPlainText(editor: Editor): boolean {

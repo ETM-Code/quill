@@ -33,6 +33,32 @@ function parseTag(html: string): { close: boolean; name: string; bare: boolean; 
   return { close: !!m[1], name: m[2].toLowerCase(), bare: !m[3] || !m[3].trim(), selfClose: !!m[4] }
 }
 
+const IMG_ATTRS = new Set(['src', 'alt', 'title', 'width', 'height'])
+
+/** A lone <img> tag with only plain attributes -> image node attrs. */
+function parseImgTag(html: string): Record<string, string | null> | null {
+  const m = /^<img((?:\s+[a-zA-Z-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*)\s*\/?>$/i.exec(html.trim())
+  if (!m) return null
+  const attrs: Record<string, string | null> = {}
+  const re = /([a-zA-Z-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g
+  let a: RegExpExecArray | null
+  while ((a = re.exec(m[1]))) {
+    const name = a[1].toLowerCase()
+    if (!IMG_ATTRS.has(name) || name in attrs) return null
+    const raw = a[2] ?? a[3] ?? a[4] ?? ''
+    attrs[name] = raw.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+  }
+  if (!attrs.src) return null
+  if (attrs.width && !/^\d+(px)?$/.test(attrs.width)) return null
+  if (attrs.height && !/^\d+(px)?$/.test(attrs.height)) return null
+  return attrs
+}
+
+function imageAttrs(a: Record<string, string | null>) {
+  const num = (v: string | null | undefined) => (v ? Number.parseInt(v, 10) : null)
+  return { src: a.src ?? '', alt: a.alt || null, title: a.title || null, width: num(a.width), height: num(a.height) }
+}
+
 export interface ParseResult {
   doc: PMNode
   info: LoadInfo
@@ -228,8 +254,12 @@ export class MarkdownParser {
       }
       case 'hr':
         return this.node('horizontalRule', { mdMarkup: t.markup || null })
-      case 'html_block':
-        return this.node('htmlBlock', { html: t.content.replace(/\n+$/, '') })
+      case 'html_block': {
+        const html = t.content.replace(/\n+$/, '')
+        const img = this.schema.nodes.image ? parseImgTag(html) : null
+        if (img && (img.width || img.height)) return this.para([this.schema.nodes.image.create(imageAttrs(img))])
+        return this.node('htmlBlock', { html })
+      }
       case 'math_block':
         return this.node('blockMath', { latex: t.content, mdDelim: t.markup })
       case 'table_open':
@@ -400,6 +430,8 @@ export class MarkdownParser {
             else addMark(HTML_MARKS[tag.name], { mdTag: tag.name })
           } else if (tag && tag.name === 'br') {
             leaf('hardBreak', { mdForm: 'html' })
+          } else if (tag && tag.name === 'img' && parseImgTag(c.content)?.width) {
+            leaf('image', imageAttrs(parseImgTag(c.content)!))
           } else {
             leaf('htmlInline', { html: c.content })
           }

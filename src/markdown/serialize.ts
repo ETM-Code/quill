@@ -436,9 +436,17 @@ export class Writer {
         case '~':
           escape = next === '~' || prev === '~'
           break
-        case '=':
-          escape = next === '=' || prev === '='
+        case '=': {
+          // Only a run of 2+ "=" that touches non-space text can delimit
+          // ==highlight== ("a === b" and "x == y" are left alone).
+          let a = i, b = i
+          while (a > 0 && str[a - 1] === '=') a--
+          while (b + 1 < str.length && str[b + 1] === '=') b++
+          const before = a > 0 ? str[a - 1] : (this.out.slice(-1) || ' ')
+          const after = str[b + 1] ?? ''
+          escape = b > a && (!/\s/.test(after || ' ') || !/\s/.test(before))
           break
+        }
         case '<':
           escape = (lineStart && i === 0 && /^<[/A-Za-z!?]/.test(str)) || HTMLISH.test(str.slice(i))
           break
@@ -626,6 +634,13 @@ const INLINE: Record<string, InlineFn> = {
     s.atLineStart = true
   },
   image(s, node) {
+    const { width, height } = node.attrs
+    if (width || height) {
+      // Sized images (resize handle) need HTML; parse.ts reads it back.
+      const attr = (k: string, v: unknown) => (v === null || v === undefined || v === '' ? '' : ` ${k}="${String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"`)
+      s.raw(`<img${attr('src', node.attrs.src)}${attr('alt', node.attrs.alt)}${attr('title', node.attrs.title)}${attr('width', width)}${attr('height', height)}>`)
+      return
+    }
     const alt = s.esc(String(node.attrs.alt ?? ''), false)
     const src = linkDest(String(node.attrs.src ?? ''))
     const title = node.attrs.title ? ' ' + linkTitle(String(node.attrs.title)) : ''
