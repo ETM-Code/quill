@@ -45,6 +45,10 @@ export const icons = {
   rowDelete: svg('<rect x="3" y="9" width="12" height="6" rx="1.5"/><circle cx="19.5" cy="12" r="3.4"/><line x1="17.8" y1="12" x2="21.2" y2="12"/>'),
   colDelete: svg('<rect x="9" y="3" width="6" height="12" rx="1.5"/><circle cx="12" cy="19.5" r="3.4"/><line x1="10.3" y1="19.5" x2="13.7" y2="19.5"/>'),
   mermaid: svg('<rect x="3" y="3" width="6" height="4" rx="1"/><rect x="15" y="3" width="6" height="4" rx="1"/><rect x="9" y="17" width="6" height="4" rx="1"/><line x1="6" y1="7" x2="6" y2="12"/><line x1="18" y1="7" x2="18" y2="12"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="12" y1="12" x2="12" y2="17"/>'),
+  folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+  outline: svg('<line x1="8" y1="6" x2="21" y2="6"/><line x1="11" y1="12" x2="21" y2="12"/><line x1="14" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="0.6" fill="currentColor"/><circle cx="7" cy="12" r="0.6" fill="currentColor"/><circle cx="10" cy="18" r="0.6" fill="currentColor"/>'),
+  source: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/><path d="m10 13-2 2 2 2"/><path d="m14 13 2 2-2 2"/>'),
+  highlight: svg('<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/>'),
 }
 
 export type IconName = keyof typeof icons

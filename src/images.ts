@@ -23,6 +23,12 @@ interface ImageContext {
    * one that builds webview URIs. Return null to fall back to the default.
    */
   resolveLocal?: (src: string, baseDir: string | null) => string | null
+  /**
+   * Called before saving image bytes when the document has never been saved
+   * (no baseDir): the host prompts to save, and resolves true once a path
+   * exists. Unset means the saver decides on its own (shows a toast).
+   */
+  ensureSaved?: () => Promise<boolean>
 }
 
 const ctx: ImageContext = { baseDir: null, saver: async () => null }
@@ -31,7 +37,19 @@ export function configureImages(next: Partial<ImageContext>): void {
   Object.assign(ctx, next)
 }
 
-function isExternalSrc(src: string): boolean {
+/** Directory of the current document (null while untitled). */
+export function imageBaseDir(): string | null {
+  return ctx.baseDir
+}
+
+/** Prompt-to-save gate shared by paste, drop and the image dialog. */
+export async function ensureDocumentSaved(): Promise<boolean> {
+  if (ctx.baseDir) return true
+  if (!ctx.ensureSaved) return true // let the saver report it
+  return ctx.ensureSaved()
+}
+
+export function isExternalSrc(src: string): boolean {
   return /^(https?:|data:|blob:|asset:|tauri:|file:)/i.test(src)
 }
 
@@ -44,6 +62,44 @@ function joinPath(dir: string, rel: string): string {
   return `${dir.replace(/[/\\]+$/, '')}${sep}${rel.replace(/^[/\\]+/, '')}`
 }
 
+function decodePath(p: string): string {
+  try {
+    return decodeURI(p)
+  } catch {
+    return p
+  }
+}
+
+/**
+ * Absolute filesystem path for a local image src (relative srcs resolve
+ * against the document directory; `%20`-style escapes are decoded), or null
+ * for remote/data srcs and relative srcs in an untitled document.
+ */
+export function localImagePath(src: string): string | null {
+  if (!src) return null
+  if (/^file:/i.test(src)) {
+    try {
+      return decodeURIComponent(new URL(src).pathname)
+    } catch {
+      return null
+    }
+  }
+  if (isExternalSrc(src)) return null
+  const clean = decodePath(src.replace(/[?#].*$/, ''))
+  if (isAbsolute(clean)) return clean
+  return ctx.baseDir ? normalizePath(joinPath(ctx.baseDir, clean)) : null
+}
+
+function normalizePath(p: string): string {
+  const out: string[] = []
+  for (const part of p.split('/')) {
+    if (part === '.' || (part === '' && out.length > 0)) continue
+    if (part === '..' && out.length > 1) out.pop()
+    else out.push(part)
+  }
+  return out.join('/') || '/'
+}
+
 /** Map a stored markdown src to a URL the webview can actually load. */
 export function resolveForDisplay(src: string): string {
   if (!src || isExternalSrc(src)) return src
@@ -51,7 +107,7 @@ export function resolveForDisplay(src: string): string {
     const resolved = ctx.resolveLocal(src, ctx.baseDir)
     if (resolved) return resolved
   }
-  const abs = isAbsolute(src) ? src : ctx.baseDir ? joinPath(ctx.baseDir, src) : null
+  const abs = localImagePath(src)
   if (!abs) return src
   try {
     const convert = (window as { __TAURI_INTERNALS__?: { convertFileSrc?: (p: string) => string } })
@@ -85,28 +141,85 @@ const imageConfig = {
     return `![${alt}](${src}${title ? ` "${title}"` : ''})`
   },
   addNodeView() {
-    return () => {
-      const dom = document.createElement('img')
-      dom.className = 'quill-image'
-      const apply = (n: { attrs: { src?: string; alt?: string | null; title?: string | null } }) => {
-        dom.setAttribute('src', resolveForDisplay(n.attrs.src ?? ''))
-        if (n.attrs.alt) dom.setAttribute('alt', n.attrs.alt)
-        else dom.removeAttribute('alt')
-        if (n.attrs.title) dom.setAttribute('title', n.attrs.title)
-        else dom.removeAttribute('title')
-      }
-      return {
-        dom,
-        // ProseMirror calls the renderer with the node bound; mirror that here.
-        update(updated: { type: { name: string }; attrs: { src?: string; alt?: string | null; title?: string | null } }) {
-          if (updated.type.name !== 'image') return false
-          apply(updated)
-          return true
-        },
-        _init: dom,
-      }
-    }
+    return ({ node, getPos, editor }: { node: ImageNodeLike; getPos: () => number | undefined; editor: Editor }) =>
+      createImageNodeView(node, getPos, editor)
   },
+}
+
+interface ImageNodeLike {
+  type: { name: string }
+  attrs: { src?: string; alt?: string | null; title?: string | null; width?: number | string | null }
+}
+
+// Inline image node view: <span.quill-image-wrap><img/><span.handle/></span>.
+// The corner handle resizes the width (aspect ratio preserved); the value is
+// stored in the node's `width` attribute (rendered as <img width> by the
+// markdown serializer). Clicks/double-clicks are handled by the
+// image-interactions plugin in src/extensions.
+function createImageNodeView(node: ImageNodeLike, getPos: () => number | undefined, editor: Editor) {
+  const dom = document.createElement('span')
+  dom.className = 'quill-image-wrap'
+  const img = document.createElement('img')
+  img.className = 'quill-image'
+  img.draggable = false
+  const handle = document.createElement('span')
+  handle.className = 'quill-image-handle'
+  handle.title = 'Drag to resize'
+  dom.append(img, handle)
+
+  const apply = (n: ImageNodeLike) => {
+    img.setAttribute('src', resolveForDisplay(n.attrs.src ?? ''))
+    if (n.attrs.alt) img.setAttribute('alt', n.attrs.alt)
+    else img.removeAttribute('alt')
+    if (n.attrs.title) img.setAttribute('title', n.attrs.title)
+    else img.removeAttribute('title')
+    const w = Number.parseInt(String(n.attrs.width ?? ''), 10)
+    img.style.width = Number.isFinite(w) && w > 0 ? `${w}px` : ''
+  }
+  apply(node)
+
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault()
+    e.stopPropagation()
+    const startX = e.clientX
+    const startW = img.getBoundingClientRect().width
+    const maxW = (dom.closest('.tiptap') as HTMLElement | null)?.clientWidth ?? 2000
+    dom.classList.add('resizing')
+    const move = (ev: MouseEvent) => {
+      const w = Math.max(40, Math.min(maxW, startW + ev.clientX - startX))
+      img.style.width = `${Math.round(w)}px`
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      dom.classList.remove('resizing')
+      const pos = getPos()
+      if (pos == null) return
+      const width = Math.round(img.getBoundingClientRect().width)
+      const current = editor.state.doc.nodeAt(pos)
+      if (!current || current.type.name !== 'image') return
+      editor.view.dispatch(
+        editor.state.tr.setNodeMarkup(pos, undefined, { ...current.attrs, width, height: null }),
+      )
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  })
+
+  return {
+    dom,
+    update(updated: ImageNodeLike) {
+      if (updated.type.name !== 'image') return false
+      apply(updated)
+      return true
+    },
+    ignoreMutation() {
+      return true
+    },
+    stopEvent(event: Event) {
+      return event.target === handle
+    },
+  }
 }
 
 // extend() rejects unknown config keys at the type level; markdownName /
@@ -130,16 +243,42 @@ function extFor(mime: string): string {
   return EXT_BY_MIME[mime.toLowerCase()] ?? 'png'
 }
 
-/** Save bytes through the configured saver and insert an image node. */
-export async function insertImageBytes(editor: Editor, bytes: Uint8Array, ext: string): Promise<void> {
+/** Alt text guess from a file name: "my_chart-v2.png" -> "my chart v2". */
+export function altFromFilename(name: string): string | null {
+  const base = name.split(/[/\\]/).pop() ?? ''
+  const stem = base.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim()
+  if (!stem || /^(img|image|screen ?shot|pasted|clipboard)(\s*[-\d]|\s+at\s|$)/i.test(stem)) return null
+  return stem
+}
+
+/** Insert an image node at `pos` (or the selection). */
+export function insertImageNode(editor: Editor, src: string, alt: string | null = null, pos?: number): void {
+  const content = { type: 'image', attrs: { src, alt, title: null } }
+  const chain = editor.chain().focus()
+  if (pos != null) chain.insertContentAt(pos, content).run()
+  else chain.insertContent(content).run()
+}
+
+/**
+ * Save bytes through the configured saver and insert an image node. An
+ * untitled document is offered a save first (ensureSaved) instead of
+ * dropping the image.
+ */
+export async function insertImageBytes(
+  editor: Editor,
+  bytes: Uint8Array,
+  ext: string,
+  opts: { alt?: string | null; pos?: number } = {},
+): Promise<void> {
+  if (!(await ensureDocumentSaved())) return
   const src = await ctx.saver(bytes, ext)
   if (!src) return
-  editor.chain().focus().insertContent({ type: 'image', attrs: { src, alt: null, title: null } }).run()
+  insertImageNode(editor, src, opts.alt ?? null, opts.pos)
 }
 
 async function insertImageFile(editor: Editor, file: File): Promise<void> {
   const bytes = new Uint8Array(await file.arrayBuffer())
-  await insertImageBytes(editor, bytes, extFor(file.type))
+  await insertImageBytes(editor, bytes, extFor(file.type), { alt: altFromFilename(file.name) })
 }
 
 function imageFilesFrom(dt: DataTransfer | null): File[] {

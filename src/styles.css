@@ -218,9 +218,177 @@ button {
   vertical-align: middle;
 }
 
-.tiptap img.quill-image.ProseMirror-selectednode {
+.tiptap img.quill-image.ProseMirror-selectednode,
+.tiptap .quill-image-wrap.ProseMirror-selectednode img.quill-image {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Image node view wrapper + resize handle */
+.tiptap .quill-image-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.tiptap .quill-image-wrap.ProseMirror-selectednode {
+  outline: none;
+}
+
+.tiptap .quill-image-wrap img.quill-image {
+  cursor: default;
+}
+
+.quill-image-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  background: var(--accent);
+  border: 2px solid var(--bg-primary);
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.quill-image-wrap:hover .quill-image-handle,
+.quill-image-wrap.ProseMirror-selectednode .quill-image-handle,
+.quill-image-wrap.resizing .quill-image-handle {
+  opacity: 1;
+}
+
+.quill-mod-held .tiptap img.quill-image {
+  cursor: pointer;
+}
+
+/* Image popover */
+.image-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 340px;
+}
+
+.image-popover-alt {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--fg-primary);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 8px;
+  outline: none;
+}
+
+.image-popover-alt:focus {
+  border-color: var(--accent);
+}
+
+.image-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.image-popover-sizes {
+  display: flex;
+  gap: 1px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 2px;
+  margin-right: auto;
+}
+
+.image-popover-size {
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.image-popover-size:hover {
+  color: var(--fg-primary);
+}
+
+.image-popover-size.active {
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  box-shadow: 0 0 0 0.5px var(--border-strong), 0 1px 2px light-dark(rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.4));
+}
+
+.popover-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 3px;
+  flex-shrink: 0;
+}
+
+.popover-icon-btn.danger:hover {
+  color: var(--danger);
+}
+
+.popover-icon-btn:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Native file drop caret */
+.drop-caret {
+  position: fixed;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1500;
+  display: none;
+}
+
+/* #anchor jump: brief highlight of the target heading */
+.anchor-flash {
+  position: fixed;
+  border-radius: 6px;
+  background: var(--accent-subtle);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  mix-blend-mode: multiply;
+}
+
+@media (prefers-color-scheme: dark) {
+  .anchor-flash { mix-blend-mode: screen; }
+}
+
+.anchor-flash.on {
+  animation: anchor-flash 1.1s ease-out;
+}
+
+@keyframes anchor-flash {
+  0%, 30% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.tiptap :is(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: calc(var(--titlebar-height) + 12px);
+}
+
+/* ==highlight== */
+.tiptap mark {
+  background: light-dark(#fff3a3, #5c4d12);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 /* Links */
@@ -229,11 +397,18 @@ button {
   text-decoration: underline;
   text-decoration-color: light-dark(rgba(11, 107, 203, 0.3), rgba(77, 163, 255, 0.35));
   text-underline-offset: 2px;
-  cursor: pointer;
+  /* Plain click edits/places the caret (and shows the link popover);
+     ⌘-click opens, so the pointer only appears while ⌘ is held. */
+  cursor: text;
   transition: text-decoration-color 0.1s ease;
 }
 
 .tiptap a:hover {
+  text-decoration-color: currentColor;
+}
+
+.quill-mod-held .tiptap a {
+  cursor: pointer;
   text-decoration-color: currentColor;
 }
 

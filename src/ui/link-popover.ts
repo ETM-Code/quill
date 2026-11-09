@@ -7,6 +7,8 @@ import { Popover, selectionAnchor, elementAnchor, type AnchorRect } from './popo
 export class LinkPopover {
   private editor: Editor
   private openUrl: (url: string) => void
+  private describe: (href: string) => { label: string; action: string }
+  private openBtn: HTMLButtonElement
   private popover: Popover
   private mode: 'view' | 'edit' = 'view'
 
@@ -17,9 +19,14 @@ export class LinkPopover {
   private editRow: HTMLDivElement
   private input: HTMLInputElement
 
-  constructor(editor: Editor, openUrl: (url: string) => void) {
+  constructor(
+    editor: Editor,
+    openUrl: (url: string) => void,
+    describe: (href: string) => { label: string; action: string } = href => ({ label: displayUrl(href), action: 'Open link' }),
+  ) {
     this.editor = editor
     this.openUrl = openUrl
+    this.describe = describe
     this.popover = new Popover({ className: 'link-popover' })
 
     // --- view mode: [url (click to open)] [edit] [remove] ---
@@ -32,8 +39,16 @@ export class LinkPopover {
     this.urlLabel.addEventListener('click', e => {
       e.preventDefault()
       const href = this.urlLabel.dataset.href
-      if (href) this.openUrl(href)
       this.popover.hide()
+      if (href) this.openUrl(href)
+    })
+
+    this.openBtn = iconButton(icons.externalLink, 'Open link')
+    this.openBtn.classList.add('link-popover-open')
+    this.openBtn.addEventListener('click', () => {
+      const href = this.urlLabel.dataset.href
+      this.popover.hide()
+      if (href) this.openUrl(href)
     })
 
     const copyBtn = iconButton(icons.copy, 'Copy link')
@@ -57,7 +72,7 @@ export class LinkPopover {
       this.popover.hide()
     })
 
-    this.viewRow.append(this.urlLabel, copyBtn, editBtn, removeBtn)
+    this.viewRow.append(this.urlLabel, this.openBtn, copyBtn, editBtn, removeBtn)
 
     // --- edit mode: [input] [✓] ---
     this.editRow = document.createElement('div')
@@ -86,8 +101,12 @@ export class LinkPopover {
   showForLink(anchor: HTMLAnchorElement): void {
     const href = anchor.getAttribute('href') ?? ''
     this.mode = 'view'
-    this.urlLabel.textContent = displayUrl(href)
+    const { label, action } = this.describe(href)
+    const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl'
+    this.urlLabel.textContent = label.startsWith('http') || label.startsWith('mailto:') ? displayUrl(href) : shorten(label)
     this.urlLabel.dataset.href = href
+    this.urlLabel.title = `${action} (${mod}-click the link)`
+    this.openBtn.title = action
     this.applyMode()
     this.popover.show(elementAnchor(anchor))
   }
@@ -165,6 +184,10 @@ function iconButton(svg: string, title: string): HTMLButtonElement {
   btn.title = title
   btn.innerHTML = svg
   return btn
+}
+
+function shorten(s: string): string {
+  return s.length > 42 ? `${s.slice(0, 40)}…` : s
 }
 
 function displayUrl(href: string): string {

@@ -1,0 +1,385 @@
+/* Views: raw-markdown source mode, outline sidebar, print stylesheet. */
+
+/* ------------------------------------------------------- titlebar buttons */
+
+#app {
+  position: relative;
+}
+
+.titlebar-right {
+  align-items: center;
+  gap: 6px;
+}
+
+/* Keep the right cluster out of the window-drag region. */
+.titlebar-right > * {
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: default;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.titlebar-btn[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.titlebar-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.titlebar-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ------------------------------------------------------------ source mode */
+
+.source-pill {
+  display: none;
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 16px;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.source-pill.on {
+  display: inline-block;
+}
+
+#editor-container.source-active {
+  overflow: hidden;
+  padding: 0;
+}
+
+#editor-container.source-active > #editor {
+  display: none;
+}
+
+.source-textarea {
+  display: none;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  /* Same centered 720px column as the editor, with the editor's gutters. */
+  padding: 28px max(var(--editor-padding), calc((100% - var(--content-max-width)) / 2)) 40vh;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--fg-primary);
+  caret-color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  line-height: 1.7;
+  tab-size: 2;
+  -moz-tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
+}
+
+.source-textarea::selection {
+  background: var(--selection);
+}
+
+#editor-container.source-active > .source-textarea {
+  display: block;
+}
+
+/* ---------------------------------------------------------------- outline */
+
+:root {
+  --outline-width: 220px;
+}
+
+.outline {
+  display: none;
+  position: absolute;
+  top: var(--titlebar-height);
+  left: 0;
+  bottom: 0;
+  width: var(--outline-width);
+  z-index: 20;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  font-size: 12.5px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.outline.on {
+  display: flex;
+}
+
+/* Push the document aside so the centered column keeps its shape. */
+#editor-container.has-outline {
+  margin-left: var(--outline-width);
+}
+
+.outline-title {
+  flex-shrink: 0;
+  padding: 10px 14px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.outline-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 6px 16px;
+}
+
+.outline-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.outline-list::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.outline-list:hover::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+}
+
+.outline-item {
+  display: block;
+  width: 100%;
+  padding: 3px 8px 3px calc(8px + (var(--lvl, 1) - 1) * 12px);
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font: inherit;
+  line-height: 1.45;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+.outline-item[data-level='1'] {
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+
+.outline-item:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.outline-item.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.outline-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.outline-empty {
+  padding: 8px 10px;
+  color: var(--fg-muted);
+}
+
+/* Headings land just below the top edge when navigated to. */
+.tiptap h1,
+.tiptap h2,
+.tiptap h3,
+.tiptap h4,
+.tiptap h5,
+.tiptap h6 {
+  scroll-margin-top: 12px;
+}
+
+/* ------------------------------------------------------------------ print */
+
+@page {
+  margin: 18mm 16mm;
+}
+
+@media print {
+  html:root {
+    color-scheme: light !important;
+  }
+
+  html,
+  body,
+  #app,
+  #editor-container {
+    display: block !important;
+    position: static !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  body {
+    font-size: 11pt;
+    line-height: 1.55;
+  }
+
+  #titlebar,
+  .titlebar-btn,
+  .source-pill,
+  .source-textarea,
+  .outline,
+  .popover,
+  .bubble-menu,
+  .bubble-dropdown,
+  .slash-menu,
+  .find-bar,
+  #toast-container,
+  .toast,
+  .anchor-flash,
+  .drop-caret,
+  .quill-image-handle,
+  .code-block-header,
+  .code-block-lang,
+  .code-block-copy,
+  .column-resize-handle,
+  [class*='table-control'],
+  [class*='table-handle'],
+  [class*='table-add'],
+  [class*='table-ctl'],
+  [class*='tbl-'],
+  .ProseMirror-gapcursor {
+    display: none !important;
+  }
+
+  #editor-container.source-active > #editor {
+    display: block !important;
+  }
+
+  #editor {
+    max-width: none !important;
+    margin: 0 !important;
+    min-height: 0 !important;
+  }
+
+  .tiptap {
+    min-height: 0 !important;
+    color: #000;
+    caret-color: transparent;
+  }
+
+  .tiptap ::selection {
+    background: transparent;
+  }
+
+  .tiptap h1,
+  .tiptap h2,
+  .tiptap h3,
+  .tiptap h4,
+  .tiptap h5,
+  .tiptap h6 {
+    break-after: avoid;
+    break-inside: avoid;
+  }
+
+  .tiptap p,
+  .tiptap li {
+    orphans: 3;
+    widows: 3;
+  }
+
+  .tiptap pre,
+  .tiptap .code-block,
+  .tiptap table,
+  .tiptap tr,
+  .tiptap img,
+  .tiptap .quill-image-wrap,
+  .tiptap .mermaid-block,
+  .tiptap .mermaid-svg,
+  .tiptap .katex-display,
+  .tiptap .Tiptap-mathematics-render,
+  .tiptap [data-type='block-math'],
+  .tiptap blockquote {
+    break-inside: avoid;
+  }
+
+  .tiptap img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  .tiptap thead {
+    display: table-header-group;
+  }
+
+  .tiptap .code-block {
+    overflow: visible !important;
+    border: 1px solid #d4d4d2;
+    border-radius: 6px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .tiptap pre {
+    overflow: visible !important;
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere;
+  }
+
+  .tiptap .mermaid-block {
+    border: none !important;
+    background: transparent !important;
+    overflow: visible !important;
+  }
+
+  .tiptap .selectedCell::after {
+    display: none;
+  }
+
+  .tiptap a {
+    color: #0b4fa8;
+    text-decoration: none;
+  }
+
+  .tiptap a[href^='http']::after {
+    content: ' (' attr(href) ')';
+    font-size: 0.78em;
+    color: #777;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+  }
+}

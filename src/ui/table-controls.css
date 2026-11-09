@@ -1,0 +1,61 @@
+/* Hover "+" bars that append a row / column to the end of a table. */
+
+.tbl-hover {
+  position: fixed;
+  z-index: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  animation: tbl-hover-in 0.12s ease-out;
+  transition: background-color 0.12s, color 0.12s;
+}
+
+.tbl-hover[hidden] {
+  display: none;
+}
+
+.tbl-hover-row {
+  height: 14px;
+}
+
+.tbl-hover-col {
+  width: 14px;
+}
+
+.tbl-hover:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+
+.tbl-hover-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tbl-hover-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+@keyframes tbl-hover-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tbl-hover { animation: none; }
+}
