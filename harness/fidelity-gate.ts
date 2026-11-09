@@ -58,6 +58,29 @@ if (!process.argv.includes('--skip-browser')) {
     if (r.saved !== want) { browserFails++; console.log(`FAIL [app-save] ${id}: not byte-identical`) }
     if (r.fresh !== headlessFresh) { browserFails++; console.log(`FAIL [app-fresh] ${id}: browser and headless serializer differ`) }
   }
+  // Raw HTML in the corpus (<script>, onerror=) must never execute.
+  await q.page.waitForTimeout(500)
+  const pwn = await q.page.evaluate(() => (window as any).__pwn)
+  if (pwn !== undefined) { browserFails++; console.log('FAIL raw HTML executed script:', pwn) }
+
+  // The production entities shim (vite.config.ts) must decode exactly like
+  // the `entities` package markdown-it uses in dev and tests.
+  const { decodeHTML, encodeHTML } = await import('entities')
+  const cands = new Set<string>(['&#123;', '&#x1F600;', '&#0;', '&#xD800;', '&#1114112;', '&bogus;', '&AMP;', '&amp;', '&NotEqualTilde;', '&ThickSpace;'])
+  for (let cp = 32; cp < 0x1d7ff; cp++) {
+    if (cp >= 0xd800 && cp <= 0xdfff) continue
+    const e = encodeHTML(String.fromCodePoint(cp))
+    if (/^&[A-Za-z][A-Za-z0-9]*;$/.test(e)) cands.add(e)
+  }
+  const list = [...cands]
+  const got: string[] = await q.page.evaluate(async (l: string[]) => {
+    const m = await import('/src/markdown/entities-shim.ts' as string)
+    return l.map((x: string) => m.decodeHTML(x))
+  }, list)
+  const bad = list.filter((x, i) => got[i] !== decodeHTML(x))
+  if (bad.length) { browserFails++; console.log(`FAIL entities shim differs on ${bad.length}/${list.length}:`, bad.slice(0, 10)) }
+  else console.log(`entities shim: ${list.length} entities decode identically`)
+
   // Corpus images point at files that don't exist in the mock fs (404s).
   const errors = q.consoleErrors.filter(e => !/favicon|Failed to load resource/.test(e))
   if (errors.length) { browserFails++; console.log('FAIL console errors:', errors.slice(0, 5)) }

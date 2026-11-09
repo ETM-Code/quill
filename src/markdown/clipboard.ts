@@ -12,7 +12,7 @@ import { DOMSerializer, Fragment, Slice, type Node as PMNode, type Schema } from
 import type { EditorView } from '@tiptap/pm/view'
 import { getCodec } from './index'
 import { renderedMermaidSvg } from '../mermaid'
-import { sanitizeHtml } from './sanitize'
+import { htmlToText, sanitizeHtmlSync } from './sanitize'
 
 // ---------------------------------------------------------------------------
 // Copy helpers
@@ -188,7 +188,10 @@ export function richClipboardSerializer(schema: Schema): DOMSerializer {
     const div = document.createElement('div')
     div.setAttribute('data-type', 'html-block')
     div.setAttribute('data-html', node.attrs.html)
-    div.innerHTML = sanitizeHtml(String(node.attrs.html ?? ''))
+    const html = String(node.attrs.html ?? '')
+    const clean = sanitizeHtmlSync(html)
+    if (clean !== null) div.innerHTML = clean
+    else div.textContent = htmlToText(html)
     return div
   }
   nodes.htmlInline = node => {
@@ -196,7 +199,8 @@ export function richClipboardSerializer(schema: Schema): DOMSerializer {
     span.setAttribute('data-type', 'html-inline')
     span.setAttribute('data-html', node.attrs.html)
     const html = String(node.attrs.html ?? '')
-    if (/^<img\s/i.test(html.trim())) span.innerHTML = sanitizeHtml(html)
+    const clean = /^<img\s/i.test(html.trim()) ? sanitizeHtmlSync(html) : null
+    if (clean !== null) span.innerHTML = clean
     else span.textContent = html
     return span
   }

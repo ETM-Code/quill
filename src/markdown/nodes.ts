@@ -8,7 +8,7 @@ import { Extension, Mark, Node, mergeAttributes } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as PMNode } from '@tiptap/pm/model'
-import { sanitizeHtml } from './sanitize'
+import { htmlToText, sanitizeHtml, sanitizeHtmlSync } from './sanitize'
 import './markdown.css'
 
 const hidden = (def: unknown = null) => ({ default: def, rendered: false })
@@ -90,33 +90,34 @@ function htmlBlockView(attr: string, inline: boolean) {
   return ({ node }: { node: PMNode }) => {
     const dom = document.createElement(inline ? 'span' : 'div')
     dom.contentEditable = 'false'
-    const fill = (n: PMNode) => {
-      const html = String(n.attrs[attr] ?? '')
-      dom.className = inline ? 'md-html-inline' : 'md-html-block'
-      dom.title = html.length > 300 ? html.slice(0, 300) + '…' : html
-      const trimmed = html.trim()
-      if (/^<!--[\s\S]*-->$/.test(trimmed)) {
-        dom.classList.add('md-html-comment')
-        dom.textContent = trimmed
-        return
-      }
-      if (inline) {
-        // Inline tags other than images and line breaks render as their source,
-        // so placeholders like <API_KEY> or <Enter> stay readable.
-        if (/^<img\s/i.test(trimmed)) {
-          dom.innerHTML = sanitizeHtml(trimmed)
-        } else {
-          dom.classList.add('md-html-tag')
-          dom.textContent = html
-        }
-        return
-      }
-      const clean = sanitizeHtml(html)
-      if (clean.replace(/<[^>]*>/g, '').trim() || /<(img|svg|table|hr|video)\b/i.test(clean)) {
+    let current = ''
+    const show = (html: string, clean: string) => {
+      if (html !== current) return
+      if (inline || clean.replace(/<[^>]*>/g, '').trim() || /<(img|svg|table|hr|video)\b/i.test(clean)) {
         dom.innerHTML = clean
       } else {
         dom.classList.add('md-html-source')
         dom.textContent = html
+      }
+    }
+    const fill = (n: PMNode) => {
+      const html = String(n.attrs[attr] ?? '')
+      current = html
+      dom.className = inline ? 'md-html-inline' : 'md-html-block'
+      dom.title = html.length > 300 ? html.slice(0, 300) + '…' : html
+      const trimmed = html.trim()
+      // Comments and (inline) tags other than images show their source, so
+      // placeholders like <API_KEY> or <Enter> stay readable.
+      if (/^<!--[\s\S]*-->$/.test(trimmed) || (inline && !/^<img\s/i.test(trimmed))) {
+        dom.classList.add(/^<!--/.test(trimmed) ? 'md-html-comment' : 'md-html-tag')
+        dom.textContent = html
+        return
+      }
+      const clean = sanitizeHtmlSync(html)
+      if (clean !== null) show(html, clean)
+      else {
+        dom.textContent = inline ? '' : html
+        void sanitizeHtml(html).then(c => show(html, c))
       }
     }
     fill(node)
@@ -277,7 +278,7 @@ export const Details = Node.create({
       const body = document.createElement('div')
       body.className = 'md-details-body'
       const fill = (n: PMNode) => {
-        head.innerHTML = sanitizeHtml(String(n.attrs.summary || 'Details'))
+        head.textContent = htmlToText(String(n.attrs.summary || 'Details')) || 'Details'
         if (/\sopen\b/i.test(String(n.attrs.openTag))) dom.classList.add('open')
       }
       fill(node)

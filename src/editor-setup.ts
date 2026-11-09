@@ -3,7 +3,7 @@
 // instance (no editor destroy/recreate). Markdown in and out goes through
 // src/markdown (markdown-it parser + source-preserving serializer).
 import { Editor, InputRule, getSchema, type AnyExtension } from '@tiptap/core'
-import { EditorState, TextSelection } from '@tiptap/pm/state'
+import { TextSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 import type { Slice } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
@@ -630,13 +630,14 @@ export function setMarkdown(editor: Editor, markdown: string): void {
     .setMeta('quillLoad', true)
   tr.setSelection(TextSelection.atStart(tr.doc))
   view.dispatch(tr)
-  // ...then start from a fresh state: same document, empty undo history.
-  const state = view.state
-  view.updateState(EditorState.create({
-    doc: state.doc,
-    selection: TextSelection.atStart(state.doc),
-    plugins: state.plugins,
-    storedMarks: null,
-  }))
+  // ...then reset only the undo history (re-adding the history plugin
+  // re-initialises its state; every other plugin keeps its state).
+  const plugins = view.state.plugins
+  // PluginKey names are "<name>$<n>"; Plugin.key isn't in the public typings.
+  const isHistory = (p: object) => String((p as { key?: string }).key ?? '').startsWith('history$')
+  if (plugins.some(isHistory)) {
+    const without = view.state.reconfigure({ plugins: plugins.filter(p => !isHistory(p)) })
+    view.updateState(without.reconfigure({ plugins }))
+  }
   ensureGrammarsForDoc(editor)
 }
