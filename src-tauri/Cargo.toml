@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # symbols, enable LTO, and optimize for size. The backend does file IO + window
 # management (no hot loops), so trading a little codegen speed for size is free.
 [profile.release]
-opt-level = "s"
+opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
@@ -29,6 +29,5 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri-plugin-deep-link = "2.4.6"
 url = "2.5.8"
 

@@ -1,15 +1,14 @@
 // Editor construction: one Editor instance for the lifetime of the window.
 // Code-highlight grammars are registered lazily into the live lowlight
-// instance (no editor destroy/recreate), markdown round-trips through the
-// per-extension specs (math included — no post-parse migration needed).
-import { Editor, InputRule } from '@tiptap/core'
+// instance (no editor destroy/recreate). Markdown in and out goes through
+// src/markdown (markdown-it parser + source-preserving serializer).
+import { Editor, InputRule, getSchema, type AnyExtension } from '@tiptap/core'
 import { TextSelection } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 import type { Slice } from '@tiptap/pm/model'
 import StarterKit from '@tiptap/starter-kit'
-import { Markdown } from '@tiptap/markdown'
+import Code from '@tiptap/extension-code'
 import { CharacterCount, Placeholder, Selection } from '@tiptap/extensions'
-import Typography from '@tiptap/extension-typography'
 import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight'
 import { TaskItem, TaskList } from '@tiptap/extension-list'
@@ -18,6 +17,22 @@ import { QuillImage, handleImagePaste, handleImageDrop } from './images'
 import { QuillMermaid, setMermaidClickHandler } from './mermaid'
 import { createLowlight } from 'lowlight'
 import { icons } from './icons'
+import { markdownExtensions } from './markdown/nodes'
+import { getCodec, type LoadInfo } from './markdown'
+import { inheritSource } from './markdown/source'
+import {
+  clipboardText,
+  cleanPastedHtml,
+  copyText,
+  handleMarkdownPaste,
+  promoteTableHeaders,
+  richClipboardSerializer,
+} from './markdown/clipboard'
+import { looksLikeCurrency } from './markdown/math'
+import { uxExtensions } from './extensions'
+
+export { matchInlineMathToken, looksLikeCurrency } from './markdown/math'
+export { looksLikeMarkdown, copyText } from './markdown/clipboard'
 
 // ---------------------------------------------------------------------------
 // Lazy syntax highlighting: empty lowlight instance at startup, grammars are
@@ -62,10 +77,52 @@ const GRAMMARS: Record<string, GrammarLoader> = {
   typescript: () => import('highlight.js/lib/languages/typescript'),
   xml: () => import('highlight.js/lib/languages/xml'),
   yaml: () => import('highlight.js/lib/languages/yaml'),
+  apache: () => import('highlight.js/lib/languages/apache'),
+  awk: () => import('highlight.js/lib/languages/awk'),
+  clojure: () => import('highlight.js/lib/languages/clojure'),
+  cmake: () => import('highlight.js/lib/languages/cmake'),
+  crystal: () => import('highlight.js/lib/languages/crystal'),
+  d: () => import('highlight.js/lib/languages/d'),
+  dart: () => import('highlight.js/lib/languages/dart'),
+  dockerfile: () => import('highlight.js/lib/languages/dockerfile'),
+  dos: () => import('highlight.js/lib/languages/dos'),
+  elixir: () => import('highlight.js/lib/languages/elixir'),
+  elm: () => import('highlight.js/lib/languages/elm'),
+  erlang: () => import('highlight.js/lib/languages/erlang'),
+  fortran: () => import('highlight.js/lib/languages/fortran'),
+  fsharp: () => import('highlight.js/lib/languages/fsharp'),
+  glsl: () => import('highlight.js/lib/languages/glsl'),
+  groovy: () => import('highlight.js/lib/languages/groovy'),
+  http: () => import('highlight.js/lib/languages/http'),
+  julia: () => import('highlight.js/lib/languages/julia'),
+  lisp: () => import('highlight.js/lib/languages/lisp'),
+  llvm: () => import('highlight.js/lib/languages/llvm'),
+  nginx: () => import('highlight.js/lib/languages/nginx'),
+  nim: () => import('highlight.js/lib/languages/nim'),
+  nix: () => import('highlight.js/lib/languages/nix'),
+  ocaml: () => import('highlight.js/lib/languages/ocaml'),
+  pgsql: () => import('highlight.js/lib/languages/pgsql'),
+  powershell: () => import('highlight.js/lib/languages/powershell'),
+  properties: () => import('highlight.js/lib/languages/properties'),
+  protobuf: () => import('highlight.js/lib/languages/protobuf'),
+  reasonml: () => import('highlight.js/lib/languages/reasonml'),
+  scheme: () => import('highlight.js/lib/languages/scheme'),
+  shell: () => import('highlight.js/lib/languages/shell'),
+  tcl: () => import('highlight.js/lib/languages/tcl'),
+  vbnet: () => import('highlight.js/lib/languages/vbnet'),
+  verilog: () => import('highlight.js/lib/languages/verilog'),
+  vhdl: () => import('highlight.js/lib/languages/vhdl'),
+  vim: () => import('highlight.js/lib/languages/vim'),
+  wasm: () => import('highlight.js/lib/languages/wasm'),
+  x86asm: () => import('highlight.js/lib/languages/x86asm'),
 }
 
 const LANGUAGE_ALIASES: Record<string, string> = {
-  sh: 'bash', shell: 'bash', zsh: 'bash',
+  sh: 'bash', zsh: 'bash', console: 'shell', 'shell-session': 'shell',
+  docker: 'dockerfile', ex: 'elixir', exs: 'elixir', erl: 'erlang', clj: 'clojure',
+  fs: 'fsharp', ml: 'ocaml', ps1: 'powershell', ps: 'powershell', proto: 'protobuf',
+  jl: 'julia', postgres: 'pgsql', postgresql: 'pgsql', bat: 'dos', cmd: 'dos',
+  asm: 'x86asm', nasm: 'x86asm', vb: 'vbnet', el: 'lisp', scm: 'scheme', vimscript: 'vim',
   'c++': 'cpp', cc: 'cpp', h: 'c',
   cs: 'csharp', 'c#': 'csharp',
   golang: 'go',
@@ -125,6 +182,8 @@ function refreshCodeBlocks(editor: Editor, lang: string): void {
   doc.descendants((node, pos) => {
     if (node.type.name === 'codeBlock' && canonicalLanguage(node.attrs.language) === lang) {
       tr.setNodeMarkup(pos, undefined, { ...node.attrs })
+      const fresh = tr.doc.nodeAt(tr.mapping.map(pos))
+      if (fresh) inheritSource(node, fresh)
       touched = true
     }
     return true
@@ -164,16 +223,32 @@ const LANGUAGE_LABELS: Array<[value: string, label: string]> = [
 // Size the language <select> to its selected label (selects default to the
 // width of their longest option, leaving the chevron stranded).
 let langMeasureEl: HTMLSpanElement | null = null
+// Widths per label: measuring forces a layout, so each label is measured once.
+const langWidths = new Map<string, number>()
+const LANGUAGE_LABEL = new Map(LANGUAGE_LABELS)
 
 function fitLanguageSelect(select: HTMLSelectElement): void {
-  if (!langMeasureEl) {
-    langMeasureEl = document.createElement('span')
-    langMeasureEl.style.cssText =
-      'position:fixed;visibility:hidden;white-space:pre;font-family:var(--font-sans);font-size:11.5px;'
-    document.body.appendChild(langMeasureEl)
+  const label = select.selectedOptions[0]?.textContent ?? ''
+  let width = langWidths.get(label)
+  if (width === undefined) {
+    if (!langMeasureEl) {
+      langMeasureEl = document.createElement('span')
+      langMeasureEl.style.cssText =
+        'position:fixed;visibility:hidden;white-space:pre;font-family:var(--font-sans);font-size:11.5px;'
+      document.body.appendChild(langMeasureEl)
+    }
+    langMeasureEl.textContent = label
+    width = Math.ceil(langMeasureEl.offsetWidth) + 28
+    langWidths.set(label, width)
   }
-  langMeasureEl.textContent = select.selectedOptions[0]?.textContent ?? ''
-  select.style.width = `${Math.ceil(langMeasureEl.offsetWidth) + 28}px`
+  select.style.width = `${width}px`
+}
+
+function languageOption(value: string, label: string): HTMLOptionElement {
+  const opt = document.createElement('option')
+  opt.value = value
+  opt.textContent = label
+  return opt
 }
 
 const QuillCodeBlock = CodeBlockLowlight.extend({
@@ -191,23 +266,53 @@ const QuillCodeBlock = CodeBlockLowlight.extend({
       const select = document.createElement('select')
       select.className = 'code-block-lang'
       select.title = 'Language'
-      for (const [value, label] of LANGUAGE_LABELS) {
-        const opt = document.createElement('option')
-        opt.value = value
-        opt.textContent = label
-        select.appendChild(opt)
+      // Only the selected <option> exists until the picker is used: a document
+      // with hundreds of code blocks would otherwise build ~35 options each.
+      let filled = false
+      const fillOptions = () => {
+        if (filled) return
+        filled = true
+        const current = select.value
+        const custom = [...select.options].filter(o => o.value.startsWith('raw:'))
+        select.textContent = ''
+        select.append(languageOption('', 'Plain text'), ...custom)
+        for (const [value, label] of LANGUAGE_LABELS) if (value) select.append(languageOption(value, label))
+        select.value = current
       }
-      select.value = canonicalLanguage(node.attrs.language)
+      select.addEventListener('mousedown', fillOptions)
+      select.addEventListener('focus', fillOptions)
+      // Languages without a grammar keep their label (e.g. "hcl") rather than
+      // showing "Plain text".
+      const syncSelect = (language: unknown) => {
+        const canonical = canonicalLanguage(language as string)
+        const raw = typeof language === 'string' ? language.trim() : ''
+        let value = canonical
+        let label = LANGUAGE_LABEL.get(canonical) ?? canonical
+        if (!canonical && raw) {
+          value = `raw:${raw}`
+          label = raw
+        }
+        if (![...select.options].some(o => o.value === value)) {
+          const opt = languageOption(value, label)
+          if (value.startsWith('raw:') && filled) select.insertBefore(opt, select.options[1] ?? null)
+          else select.appendChild(opt)
+        }
+        if (select.value !== value) {
+          select.value = value
+          fitLanguageSelect(select)
+        }
+      }
+      syncSelect(node.attrs.language)
       fitLanguageSelect(select)
       select.addEventListener('change', () => {
         fitLanguageSelect(select)
         const pos = (getPos as () => number | undefined)()
         if (pos == null) return
-        const language = select.value || null
+        const language = select.value.startsWith('raw:') ? select.value.slice(4) : select.value || null
         editor.view.dispatch(
           editor.state.tr.setNodeMarkup(pos, undefined, { ...currentNode.attrs, language }),
         )
-        if (language) {
+        if (language && canonicalLanguage(language)) {
           void loadGrammar(language).then(ok => {
             if (ok) refreshCodeBlocks(editor as Editor, language)
           })
@@ -220,14 +325,21 @@ const QuillCodeBlock = CodeBlockLowlight.extend({
       copyBtn.type = 'button'
       copyBtn.title = 'Copy code'
       copyBtn.innerHTML = icons.copy
+      copyBtn.addEventListener('mousedown', e => e.preventDefault())
       copyBtn.addEventListener('click', () => {
-        navigator.clipboard.writeText(currentNode.textContent).then(() => {
-          copyBtn.innerHTML = icons.check
-          copyBtn.classList.add('copied')
+        // copyText runs the synchronous execCommand path first, inside this
+        // click, so WKWebView's clipboard permission rules don't bite.
+        void copyText(currentNode.textContent).then(ok => {
+          copyBtn.innerHTML = ok ? icons.check : icons.copy
+          copyBtn.classList.add(ok ? 'copied' : 'copy-failed')
+          copyBtn.title = ok ? 'Copied' : 'Copy failed: select the code and press ⌘C'
+          copyBtn.setAttribute('data-copy-state', ok ? 'copied' : 'failed')
           setTimeout(() => {
             copyBtn.innerHTML = icons.copy
-            copyBtn.classList.remove('copied')
-          }, 1200)
+            copyBtn.classList.remove('copied', 'copy-failed')
+            copyBtn.title = 'Copy code'
+            copyBtn.removeAttribute('data-copy-state')
+          }, ok ? 1200 : 2500)
         })
       })
 
@@ -244,11 +356,7 @@ const QuillCodeBlock = CodeBlockLowlight.extend({
         update(updated) {
           if (updated.type.name !== 'codeBlock') return false
           currentNode = updated
-          const lang = canonicalLanguage(updated.attrs.language)
-          if (select.value !== lang) {
-            select.value = lang
-            fitLanguageSelect(select)
-          }
+          syncSelect(updated.attrs.language)
           return true
         },
         ignoreMutation(mutation) {
@@ -258,27 +366,6 @@ const QuillCodeBlock = CodeBlockLowlight.extend({
     }
   },
 })
-
-// ---------------------------------------------------------------------------
-// Markdown clipboard
-// ---------------------------------------------------------------------------
-
-const MARKDOWN_HINTS = [
-  /^#{1,6}\s\S/m,            // heading
-  /^```/m,                   // fence
-  /\[[^\]\n]+\]\([^)\s]+\)/, // link
-  /\*\*[^*\n]+\*\*/,         // bold
-  /^>\s\S/m,                 // blockquote
-  /^\|.+\|\s*$/m,            // table row
-  /^(-|\*|\+|\d+\.)\s\S.*\n(-|\*|\+|\d+\.)\s/m, // 2+ list items
-  /^- \[[ x]\]\s/m,          // task item
-  /^(---|\*\*\*)\s*$/m,      // hr
-]
-
-export function looksLikeMarkdown(text: string): boolean {
-  if (text.length < 4) return false
-  return MARKDOWN_HINTS.some(re => re.test(text))
-}
 
 // ---------------------------------------------------------------------------
 // Editor factory
@@ -302,38 +389,10 @@ const katexMacros = {
   '\\C': '\\mathbb{C}',
 }
 
-// Pandoc's dollar rules, so currency stays text: the opening $ needs a
-// non-space to its right, the closing $ a non-space to its left and no digit
-// to its right. "$50 and $100" and "$50-$100" survive as text; "$E=mc^2$"
-// and "$2x+3$" still become math. Exported for tests.
-export function matchInlineMathToken(src: string): { raw: string; latex: string } | undefined {
-  const match = src.match(/^\$([^\s$](?:[^$\n]*[^\s$])?)\$(?![$\d])/)
-  if (!match) return undefined
-  return { raw: match[0], latex: match[1].trim() }
-}
-
-// Digits without any letter or LaTeX command ("50", "3.99", "20,", "5-") are
-// prices or plain numbers, not math worth converting while typing.
-export function looksLikeCurrency(latex: string): boolean {
-  return /^\d/.test(latex) && !/[a-zA-Z\\]/.test(latex)
-}
-
-// The stock extension's markdown tokenizer grabs any "$...$" (turning
-// "$50 for lunch and $100" into math), and its sole input rule wants
-// "$$$...". These replace both:
+// The stock inline-math input rule wants "$$$..."; this one converts
 //   $E=mc^2$  -> inline math node (not currency like "$5-" or "$20,")
-//   $$..$$    -> block math node
+// Markdown parsing of math lives in src/markdown/md.ts.
 const QuillInlineMath = InlineMath.extend({
-  markdownTokenizer: {
-    name: 'inlineMath',
-    level: 'inline',
-    start: (src: string) => src.indexOf('$'),
-    tokenize: (src: string) => {
-      const token = matchInlineMathToken(src)
-      if (!token) return undefined
-      return { type: 'inlineMath', raw: token.raw, latex: token.latex }
-    },
-  },
   addInputRules() {
     return [
       new InputRule({
@@ -391,6 +450,87 @@ const QuillBlockMath = BlockMath.extend({
   },
 })
 
+// Code can carry bold/italic/link (`**`x`**`, [`x`](u) are common in docs);
+// the stock mark excludes every other mark.
+const QuillCode = Code.extend({ excludes: '' })
+
+const noop = () => {}
+const NOOP_CALLBACKS: EditorCallbacks = {
+  onDocChanged: noop,
+  onLinkClick: noop,
+  onInlineMathClick: noop,
+  onBlockMathClick: noop,
+  onMermaidClick: noop,
+  onOpenUrl: noop,
+}
+
+/** The editor's extensions (also used headless by tests to build the schema). */
+export function quillExtensions(callbacks: EditorCallbacks = NOOP_CALLBACKS): AnyExtension[] {
+  return [
+    StarterKit.configure({
+      codeBlock: false,
+      code: false,
+      link: {
+        openOnClick: false,
+        autolink: true,
+        linkOnPaste: true,
+        defaultProtocol: 'https',
+      },
+      trailingNode: {
+        node: 'paragraph',
+      },
+      // Heading levels 1-6, default config otherwise
+    }),
+    QuillCode,
+    QuillMermaid,
+    QuillCodeBlock.configure({
+      lowlight,
+      defaultLanguage: null,
+    }),
+    TaskList,
+    TaskItem.configure({ nested: true }),
+    TableKit.configure({
+      table: { resizable: false, allowTableNodeSelection: true },
+    }),
+    QuillImage,
+    ...markdownExtensions,
+    Placeholder.configure({
+      placeholder: ({ node }) => {
+        if (node.type.name === 'heading') return 'Heading'
+        return "Write, or press '/' for blocks…"
+      },
+      includeChildren: false,
+    }),
+    Selection,
+    CharacterCount,
+    // No Typography: arrows, dashes and curly quotes rewrite commands and
+    // flags ("--force", "->", "\"x\"") in a technical editor.
+    QuillInlineMath.configure({
+      onClick: (node, pos) => callbacks.onInlineMathClick(node as never, pos),
+      katexOptions: {
+        throwOnError: false,
+        macros: katexMacros,
+      },
+    }),
+    QuillBlockMath.configure({
+      onClick: (node, pos) => callbacks.onBlockMathClick(node as never, pos),
+      katexOptions: {
+        throwOnError: false,
+        macros: katexMacros,
+        // Block equations render display-style (limits above/below operators)
+        displayMode: true,
+      },
+    }),
+    // Interaction layer (links, heading ids, shortcuts, table controls, highlight).
+    ...uxExtensions,
+  ]
+}
+
+/** Schema without an editor (tests, harness). */
+export function quillSchema() {
+  return getSchema(quillExtensions())
+}
+
 export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbacks): Editor {
   // Wire the mermaid node-view click through the module-level handler so
   // nodeViews (which don't receive custom callbacks) can reach main.ts.
@@ -401,110 +541,36 @@ export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbac
     // autofocus runs the focus command in a setTimeout; with content loaded in
     // between it dispatches a stale transaction. main.ts focuses after boot.
     autofocus: false,
-    contentType: 'markdown',
-    content: '',
-    extensions: [
-      StarterKit.configure({
-        codeBlock: false,
-        link: {
-          openOnClick: false,
-          autolink: true,
-          linkOnPaste: true,
-          defaultProtocol: 'https',
-        },
-        trailingNode: {
-          node: 'paragraph',
-        },
-        // Heading levels 1-6, default config otherwise
-      }),
-      // QuillMermaid before QuillCodeBlock: both handle the markdown `code`
-      // token, and the first handler that claims it wins. Mermaid claims only
-      // ```mermaid fences and defers everything else to the code block.
-      QuillMermaid,
-      QuillCodeBlock.configure({
-        lowlight,
-        defaultLanguage: null,
-      }),
-      TaskList,
-      TaskItem.configure({ nested: true }),
-      TableKit.configure({
-        table: { resizable: false, allowTableNodeSelection: true },
-      }),
-      QuillImage,
-      Markdown,
-      Placeholder.configure({
-        placeholder: ({ node }) => {
-          if (node.type.name === 'heading') return 'Heading'
-          return "Write, or press '/' for blocks…"
-        },
-        includeChildren: false,
-      }),
-      Selection,
-      CharacterCount,
-      Typography.configure({
-        // "^2"/"^3" -> ²/³ would corrupt LaTeX while typing $...$ math
-        superscriptTwo: false,
-        superscriptThree: false,
-      }),
-      QuillInlineMath.configure({
-        onClick: (node, pos) => callbacks.onInlineMathClick(node as never, pos),
-        katexOptions: {
-          throwOnError: false,
-          macros: katexMacros,
-        },
-      }),
-      QuillBlockMath.configure({
-        onClick: (node, pos) => callbacks.onBlockMathClick(node as never, pos),
-        katexOptions: {
-          throwOnError: false,
-          macros: katexMacros,
-          // Block equations render display-style (limits above/below operators)
-          displayMode: true,
-        },
-      }),
-    ],
+    extensions: quillExtensions(callbacks),
     editorProps: {
       attributes: {
         class: 'tiptap',
         spellcheck: 'true',
+        // macOS auto-capitalise/autocorrect rewrite commands, identifiers
+        // and table cells as you type; spelling underlines stay.
+        autocorrect: 'off',
+        autocapitalize: 'off',
       },
-      // Copy/cut put markdown on the plain-text clipboard so pasting into
-      // other apps preserves structure. (text/html still carries rich copy.)
+      // text/plain: markdown (raw code for an all-code selection) so pasting
+      // into other apps keeps structure. text/html: rich HTML other apps can
+      // render (math source, mermaid SVG, absolute image URLs).
       clipboardTextSerializer: (slice: Slice) => {
         try {
-          const content = slice.content.toJSON()
-          if (!content) return ''
-          const md = editor.markdown?.serialize({ type: 'doc', content })
-          if (typeof md === 'string') return md.replace(/\n+$/, '')
+          return clipboardText(editor.schema, slice)
         } catch (e) {
           console.error('markdown clipboard serialize failed:', e)
+          return slice.content.textBetween(0, slice.content.size, '\n\n', ' ')
         }
-        return slice.content.textBetween(0, slice.content.size, '\n')
       },
-      // Pasting markdown-looking plain text parses it into rich content.
+      clipboardSerializer: undefined,
+      transformPastedHTML: (html: string) => cleanPastedHtml(html),
+      transformPasted: (slice: Slice) => promoteTableHeaders(slice, editor.schema),
       handlePaste: (view: EditorView, event: ClipboardEvent) => {
         // Pasted image data wins over text handling (writes to disk + inserts).
         if (handleImagePaste(editor, event)) return true
-        const clipboard = event.clipboardData
-        if (!clipboard) return false
-        const html = clipboard.getData('text/html')
-        const text = clipboard.getData('text/plain')
-        if (html || !text || !looksLikeMarkdown(text)) return false
-        // Don't markdown-parse into code blocks
-        const { $from } = view.state.selection
-        if ($from.parent.type.name === 'codeBlock') return false
-        try {
-          const json = editor.markdown?.parse(text) as JSONNode | null
-          const nodes = json ? (normalizeSoftBreaks(json).content ?? []) : []
-          if (nodes.length > 0) {
-            editor.commands.insertContent(nodes as never)
-            ensureGrammarsForDoc(editor)
-            return true
-          }
-        } catch (e) {
-          console.error('markdown paste parse failed:', e)
-        }
-        return false
+        const handled = handleMarkdownPaste(view, event)
+        if (handled) ensureGrammarsForDoc(editor)
+        return handled
       },
       handleDrop: (_view: EditorView, event: DragEvent) => {
         // Dropped image files write to disk + insert at the drop point.
@@ -534,6 +600,7 @@ export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbac
       if (transaction.docChanged) callbacks.onDocChanged()
     },
   })
+  editor.view.setProps({ clipboardSerializer: richClipboardSerializer(editor.schema) })
 
   // Clicking the empty space below the last block puts the caret at the end.
   const container = element.closest('#editor-container') ?? element
@@ -552,131 +619,61 @@ export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbac
     }
   })
 
+  // Debug / harness hook for the markdown layer (no app data).
+  ;(window as unknown as { quillMarkdown?: unknown }).quillMarkdown = {
+    /** load -> save through the app path, with source preservation off. */
+    serializeFresh: (md: string) => {
+      const codec = getCodec(editor.schema)
+      return codec.serialize(codec.parse(md).doc, { preserve: false })
+    },
+    load: () => loads.get(editor) ?? null,
+  }
+
   return editor
 }
 
-/** Markdown for the whole document. */
+// ---------------------------------------------------------------------------
+// Load / save
+// ---------------------------------------------------------------------------
+
+/** The parse of the file currently in each editor (for verbatim saving). */
+const loads = new WeakMap<Editor, LoadInfo>()
+
+/** Markdown for the whole document. Unedited blocks are written verbatim. */
 export function getMarkdown(editor: Editor): string {
-  let md = editor.getMarkdown()
-  // Trailing empty paragraphs (e.g. the always-present trailing node)
-  // serialize as `&nbsp;` lines; don't persist those.
-  md = md.replace(/(?:\n+&nbsp;[ \t]*)+\s*$/, '').replace(/^&nbsp;[ \t]*$/, '')
-  if (md && !md.endsWith('\n')) md += '\n'
-  return md
-}
-
-// ---------------------------------------------------------------------------
-// Fast markdown parsing for large documents.
-//
-// marked's lexer is quadratic in input size (it rescans the remaining source
-// per block token): 209KB ≈ 5.7s in one call, ~170ms parsed in ~6KB chunks.
-// Chunking is only safe at boundaries that can't change parse results, so we
-// split at blank lines whose next line clearly starts a fresh top-level block.
-// ---------------------------------------------------------------------------
-
-const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/
-// Lines that may belong to the previous block: indented continuations, list
-// items (loose lists!), blockquotes, table rows, setext underlines.
-const UNSAFE_BLOCK_START_RE = /^(\s|[-*+>|]|\d+[.)]|=+\s*$)/
-const LINK_DEF_RE = /^\s{0,3}\[[^\]]+\]:\s/m
-
-const CHUNK_MIN_LINES = 220
-
-export function splitMarkdownForParsing(markdown: string): string[] {
-  const lines = markdown.split('\n')
-  const chunks: string[] = []
-  let buf: string[] = []
-  let fence: string | null = null
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    const fenceMatch = FENCE_RE.exec(line)
-    if (fenceMatch) {
-      if (fence === null) {
-        fence = fenceMatch[1]
-      } else if (fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) {
-        fence = null
-      }
-    }
-    buf.push(line)
-
-    if (
-      fence === null
-      && buf.length >= CHUNK_MIN_LINES
-      && line.trim() === ''
-      && i + 1 < lines.length
-      && lines[i + 1].trim() !== ''
-      && !UNSAFE_BLOCK_START_RE.test(lines[i + 1])
-    ) {
-      chunks.push(buf.join('\n'))
-      buf = []
-    }
-  }
-  if (buf.length) chunks.push(buf.join('\n'))
-  return chunks
-}
-
-type DocJSON = { type: 'doc'; content: unknown[] }
-
-type JSONNode = {
-  type?: string
-  text?: string
-  content?: JSONNode[]
+  return getCodec(editor.schema).serialize(editor.state.doc, { load: loads.get(editor) ?? null })
 }
 
 /**
- * CommonMark soft breaks (single newlines inside a paragraph) must render as
- * spaces. marked leaves them as "\n" in text tokens, and ProseMirror renders
- * with white-space: pre-wrap, so without this hard-wrapped source files would
- * display with forced line breaks. Code blocks keep their newlines.
+ * Replace the document from a markdown string. For loading a file (the
+ * default) the load is not undoable: history is reset, so Cmd+Z can't bring
+ * back the previous file's content under the new file's name. Pass
+ * `{ undoable: true }` for in-document rewrites (e.g. applying source-view
+ * edits) to make it one undo step and keep earlier history.
  */
-export function normalizeSoftBreaks(node: JSONNode): JSONNode {
-  if (node.type === 'codeBlock' || node.type === 'mermaid') return node
-  if (typeof node.text === 'string' && node.text.includes('\n')) {
-    node.text = node.text.replace(/[ \t]*\n[ \t]*/g, ' ')
+export function setMarkdown(editor: Editor, markdown: string, opts: { undoable?: boolean } = {}): void {
+  const { doc, info } = getCodec(editor.schema).parse(markdown)
+  loads.set(editor, info)
+  const view = editor.view
+  // Dispatch so listeners (word count, dirty state, plugins) see the change...
+  const tr = view.state.tr
+    .replaceWith(0, view.state.doc.content.size, doc.content)
+    .setMeta('quillLoad', true)
+  if (!opts.undoable) tr.setMeta('addToHistory', false)
+  tr.setSelection(TextSelection.atStart(tr.doc))
+  view.dispatch(tr)
+  if (opts.undoable) {
+    ensureGrammarsForDoc(editor)
+    return
   }
-  if (Array.isArray(node.content)) {
-    for (const child of node.content) normalizeSoftBreaks(child)
+  // ...then reset only the undo history (re-adding the history plugin
+  // re-initialises its state; every other plugin keeps its state).
+  const plugins = view.state.plugins
+  // PluginKey names are "<name>$<n>"; Plugin.key isn't in the public typings.
+  const isHistory = (p: object) => String((p as { key?: string }).key ?? '').startsWith('history$')
+  if (plugins.some(isHistory)) {
+    const without = view.state.reconfigure({ plugins: plugins.filter(p => !isHistory(p)) })
+    view.updateState(without.reconfigure({ plugins }))
   }
-  return node
-}
-
-export function parseMarkdownFast(editor: Editor, markdown: string): DocJSON | string {
-  const manager = editor.markdown
-  if (!manager) return markdown
-
-  try {
-    const content: unknown[] = []
-    if (
-      markdown.length < 10_000
-      || LINK_DEF_RE.test(markdown)
-      || splitMarkdownForParsing(markdown).length < 2
-    ) {
-      const json = manager.parse(markdown) as JSONNode | null
-      if (json?.content) content.push(...json.content)
-    } else {
-      for (const chunk of splitMarkdownForParsing(markdown)) {
-        const json = manager.parse(chunk) as JSONNode | null
-        if (json?.content) content.push(...json.content)
-      }
-    }
-    return normalizeSoftBreaks({ type: 'doc', content: content as JSONNode[] }) as DocJSON
-  } catch (e) {
-    console.error('markdown parse failed, falling back to setContent:', e)
-    return markdown
-  }
-}
-
-/** Replace the document from a markdown string (load/open path). */
-export function setMarkdown(editor: Editor, markdown: string): void {
-  const content = parseMarkdownFast(editor, markdown)
-  if (typeof content === 'string') {
-    editor.commands.setContent(content, { contentType: 'markdown' })
-  } else {
-    editor.commands.setContent(content as never)
-  }
-  // setContent maps the old selection through the replace, which can leave a
-  // silent whole-document selection; later commands would apply to all of it.
-  editor.commands.setTextSelection(0)
   ensureGrammarsForDoc(editor)
 }

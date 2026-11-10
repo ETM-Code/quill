@@ -1,17 +1,28 @@
 // Selection formatting bar: appears over text selections, Notion-style.
 // Hand-rolled (no floating-ui dep): positioned from selection coords.
 import type { Editor } from '@tiptap/core'
-import { TextSelection } from '@tiptap/pm/state'
+import { TextSelection, type EditorState, type Transaction } from '@tiptap/pm/state'
+import { CellSelection } from '@tiptap/pm/tables'
 import { icons, type IconName } from '../icons'
 import { hideAllPopovers } from './popover'
+import { insertInlineMath } from '../extensions/math-insert'
+import { tableIcons } from './table-controls'
+import {
+  columnAlign, moveColumnLeft, moveColumnRight, moveRowDown, moveRowUp, setColumnAlign,
+  type CellAlign,
+} from '../extensions/table-controls'
 
 interface ButtonSpec {
-  icon: IconName
+  icon?: IconName
+  /** Inline SVG for icons that are not in the shared set (table controls). */
+  svg?: string
   title: string
   isActive?: (editor: Editor) => boolean
   onClick: (editor: Editor) => void
   /** Show only when inside a table */
   tableOnly?: boolean
+  /** Draw a divider before this button (table group) */
+  groupStart?: boolean
 }
 
 const TEXT_BUTTONS: ButtonSpec[] = [
@@ -45,15 +56,40 @@ const TEXT_BUTTONS: ButtonSpec[] = [
     isActive: e => e.isActive('code'),
     onClick: e => e.chain().focus().toggleCode().run(),
   },
+  {
+    icon: 'math',
+    title: 'Inline math (⌘⇧M)',
+    isActive: e => e.isActive('inlineMath'),
+    onClick: e => void insertInlineMath(e),
+  },
 ]
 
+/** Run a ProseMirror command from a toolbar button, then return focus to the editor. */
+function runCommand(e: Editor, cmd: (state: EditorState, dispatch?: (tr: Transaction) => void) => boolean): void {
+  cmd(e.state, tr => e.view.dispatch(tr))
+  e.view.focus()
+}
+
+/** Click an alignment button: set it, or clear it when it is already active. */
+function alignButton(editor: Editor, target: Exclude<CellAlign, null>): void {
+  runCommand(editor, setColumnAlign(columnAlign(editor.state) === target ? null : target))
+}
+
+// Header handling: a GFM table always keeps its first row as the header (see
+// extensions/table-controls.ts), so there is deliberately no header toggle.
 const TABLE_BUTTONS: ButtonSpec[] = [
   { icon: 'rowBelow', title: 'Add row below (or Tab in the last cell)', onClick: e => e.chain().focus().addRowAfter().run(), tableOnly: true },
   { icon: 'rowAbove', title: 'Add row above', onClick: e => e.chain().focus().addRowBefore().run(), tableOnly: true },
   { icon: 'colAfter', title: 'Add column right', onClick: e => e.chain().focus().addColumnAfter().run(), tableOnly: true },
   { icon: 'colBefore', title: 'Add column left', onClick: e => e.chain().focus().addColumnBefore().run(), tableOnly: true },
-  { icon: 'headerRow', title: 'Toggle header row', onClick: e => e.chain().focus().toggleHeaderRow().run(), tableOnly: true },
-  { icon: 'rowDelete', title: 'Delete row', onClick: e => e.chain().focus().deleteRow().run(), tableOnly: true },
+  { svg: tableIcons.alignLeft, title: 'Align column left', groupStart: true, isActive: e => columnAlign(e.state) === 'left', onClick: e => alignButton(e, 'left'), tableOnly: true },
+  { svg: tableIcons.alignCenter, title: 'Align column center', isActive: e => columnAlign(e.state) === 'center', onClick: e => alignButton(e, 'center'), tableOnly: true },
+  { svg: tableIcons.alignRight, title: 'Align column right', isActive: e => columnAlign(e.state) === 'right', onClick: e => alignButton(e, 'right'), tableOnly: true },
+  { svg: tableIcons.moveUp, title: 'Move row up (⌥⌘↑)', groupStart: true, onClick: e => runCommand(e, moveRowUp), tableOnly: true },
+  { svg: tableIcons.moveDown, title: 'Move row down (⌥⌘↓)', onClick: e => runCommand(e, moveRowDown), tableOnly: true },
+  { svg: tableIcons.moveLeft, title: 'Move column left (⌥⌘←)', onClick: e => runCommand(e, moveColumnLeft), tableOnly: true },
+  { svg: tableIcons.moveRight, title: 'Move column right (⌥⌘→)', onClick: e => runCommand(e, moveColumnRight), tableOnly: true },
+  { icon: 'rowDelete', title: 'Delete row', groupStart: true, onClick: e => e.chain().focus().deleteRow().run(), tableOnly: true },
   { icon: 'colDelete', title: 'Delete column', onClick: e => e.chain().focus().deleteColumn().run(), tableOnly: true },
   { icon: 'trash', title: 'Delete table', onClick: e => e.chain().focus().deleteTable().run(), tableOnly: true },
 ]
@@ -146,6 +182,12 @@ export class BubbleMenu {
     tableDivider.dataset.tableOnly = '1'
     this.el.appendChild(tableDivider)
     for (const spec of TABLE_BUTTONS) {
+      if (spec.groupStart) {
+        const sep = divider()
+        sep.dataset.tableOnly = '1'
+        sep.dataset.tableSep = '1'
+        this.el.appendChild(sep)
+      }
       this.addButton(spec)
     }
 
@@ -164,7 +206,7 @@ export class BubbleMenu {
     btn.className = 'bubble-btn'
     btn.type = 'button'
     btn.title = spec.title
-    btn.innerHTML = icons[spec.icon]
+    btn.innerHTML = spec.svg ?? (spec.icon ? icons[spec.icon] : '')
     if (spec.tableOnly) btn.dataset.tableOnly = '1'
     btn.addEventListener('click', () => {
       spec.onClick(this.editor)
@@ -199,7 +241,10 @@ export class BubbleMenu {
     // Two modes: text selection (full toolbar), or caret inside a table
     // (table controls only — otherwise rows/columns are undiscoverable).
     const selectionMode = !empty && isText && !inCode && focusedHere
-    const tableCaretMode = !selectionMode && inTable && isText && focusedHere
+    // Cell selections (several cells / a row / a column) keep the table bar up
+    // so alignment and move buttons work on them.
+    const isCells = state.selection instanceof CellSelection
+    const tableCaretMode = !selectionMode && inTable && (isText || isCells) && focusedHere
 
     if (!selectionMode && !tableCaretMode) {
       this.hide()
@@ -227,10 +272,11 @@ export class BubbleMenu {
     if (!showText) this.closeDropdown()
     for (const { spec, el } of this.buttons) {
       el.style.display = spec.tableOnly ? (inTable ? '' : 'none') : (showText ? '' : 'none')
-      el.classList.toggle('active', spec.isActive?.(this.editor) ?? false)
+      el.classList.toggle('active', (!spec.tableOnly || inTable) && (spec.isActive?.(this.editor) ?? false))
     }
-    const tableDiv = this.el.querySelector('[data-table-only].bubble-divider') as HTMLElement | null
-    if (tableDiv) tableDiv.style.display = inTable && showText ? '' : 'none'
+    for (const d of this.el.querySelectorAll<HTMLElement>('.bubble-divider[data-table-only]')) {
+      d.style.display = d.dataset.tableSep ? (inTable ? '' : 'none') : (inTable && showText ? '' : 'none')
+    }
 
     if (showText) {
       const current = TURN_INTO.find(o => o.isActive(this.editor))

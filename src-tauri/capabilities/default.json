@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["*"],
+  "windows": [
+    "*"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -15,6 +17,27 @@
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
     "fs:allow-read-file",
-    "fs:scope-home-recursive"
+    "fs:allow-exists",
+    "fs:scope-home-recursive",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        {
+          "path": "/Volumes/**"
+        },
+        {
+          "path": "/tmp/**"
+        },
+        {
+          "path": "/private/tmp/**"
+        },
+        {
+          "path": "/private/var/folders/**"
+        },
+        {
+          "path": "/Users/Shared/**"
+        }
+      ]
+    }
   ]
 }

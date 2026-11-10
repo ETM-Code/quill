@@ -1,0 +1,148 @@
+/* Markdown constructs beyond the basics: front matter, raw HTML, callouts,
+   footnotes, details, highlight/kbd. Colours derive from the app's tokens
+   where they exist, with fallbacks. */
+
+.tiptap .md-front-matter {
+  margin: 0 0 1em;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 6px;
+  font-size: 0.85em;
+  color: var(--text-muted, rgba(127, 127, 127, 0.95));
+  user-select: none;
+}
+.tiptap .md-front-matter summary {
+  cursor: pointer;
+  padding: 4px 10px;
+  list-style-position: inside;
+}
+.tiptap .md-front-matter pre {
+  margin: 0;
+  padding: 6px 12px 8px;
+  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+  white-space: pre-wrap;
+  background: none;
+}
+
+.tiptap .md-html-block {
+  margin: 0.75em 0;
+  position: relative;
+}
+.tiptap .md-html-block.md-html-source,
+.tiptap .md-html-block.md-html-comment,
+.tiptap .md-source {
+  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  color: var(--text-muted, rgba(127, 127, 127, 0.95));
+  background: none;
+  padding: 0;
+  margin: 0.5em 0;
+}
+.tiptap .md-html-inline.md-html-tag,
+.tiptap .md-html-inline.md-html-comment {
+  color: var(--text-muted, rgba(127, 127, 127, 0.95));
+}
+.tiptap .md-html-block img,
+.tiptap .md-html-inline img {
+  max-width: 100%;
+}
+.tiptap .ProseMirror-selectednode.md-html-block,
+.tiptap .ProseMirror-selectednode.md-html-inline,
+.tiptap .ProseMirror-selectednode.md-source,
+.tiptap .ProseMirror-selectednode.md-front-matter {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 2px;
+}
+
+/* Callouts: GitHub alerts (> [!NOTE]) and Obsidian callouts */
+.tiptap blockquote.md-callout {
+  --callout: #0969da;
+  border-left: 3px solid var(--callout);
+  background: color-mix(in srgb, var(--callout) 7%, transparent);
+  border-radius: 0 6px 6px 0;
+  padding: 0.4em 1em;
+  font-style: normal;
+}
+.tiptap blockquote.md-callout-tip,
+.tiptap blockquote.md-callout-success { --callout: #1a7f37; }
+.tiptap blockquote.md-callout-important { --callout: #8250df; }
+.tiptap blockquote.md-callout-warning,
+.tiptap blockquote.md-callout-caution,
+.tiptap blockquote.md-callout-attention { --callout: #9a6700; }
+.tiptap blockquote.md-callout-danger,
+.tiptap blockquote.md-callout-error,
+.tiptap blockquote.md-callout-bug { --callout: #cf222e; }
+.tiptap .md-callout-marker {
+  color: var(--callout);
+  font-weight: 600;
+  font-size: 0.85em;
+  letter-spacing: 0.02em;
+}
+/* Not editing: hide the raw "[!NOTE]" and show its label on its own line */
+.tiptap .md-callout-marker:not(.md-callout-editing) {
+  font-size: 0;
+  letter-spacing: 0;
+}
+.tiptap .md-callout-marker:not(.md-callout-editing)::before {
+  content: attr(data-label);
+  display: block;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.15em;
+}
+
+/* Footnotes */
+.tiptap .md-fnref {
+  color: var(--accent, #3b82f6);
+  font-size: 0.75em;
+}
+.tiptap .md-fnref::before { content: '['; }
+.tiptap .md-fnref::after { content: ']'; }
+.tiptap .md-fndef {
+  position: relative;
+  font-size: 0.9em;
+  padding-left: 2.2em;
+  color: var(--text-muted, inherit);
+}
+.tiptap .md-fndef::before {
+  content: attr(data-label) '.';
+  position: absolute;
+  left: 0;
+  color: var(--accent, #3b82f6);
+}
+
+/* <details> */
+.tiptap .md-details {
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 6px;
+  padding: 0.3em 0.9em;
+  margin: 0.75em 0;
+}
+.tiptap .md-details-summary {
+  cursor: pointer;
+  font-weight: 600;
+  user-select: none;
+}
+.tiptap .md-details-summary::before {
+  content: '▸ ';
+  display: inline-block;
+  width: 1em;
+}
+.tiptap .md-details.open .md-details-summary::before { content: '▾ '; }
+.tiptap .md-details:not(.open) .md-details-body { display: none; }
+
+/* Inline marks */
+.tiptap mark {
+  background: color-mix(in srgb, #facc15 45%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.tiptap kbd {
+  font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+  font-size: 0.85em;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 4px;
+}

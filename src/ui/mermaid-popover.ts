@@ -65,8 +65,7 @@ export class MermaidPopover {
 
     this.popover.el.append(this.textarea, this.preview, this.hint)
 
-    // Kick off mermaid load eagerly so the preview is snappy.
-    void loadMermaid()
+    // Mermaid itself loads on first use (a diagram in the doc, or this popover opening).
   }
 
   show(code: string, pos: number, anchor: AnchorRect): void {
