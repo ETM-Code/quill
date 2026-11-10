@@ -78,7 +78,7 @@ The `.app` and `.dmg` land in `src-tauri/target/release/bundle/`. Requires [Bun]
 - **LaTeX math.** Inline `$E=mc^2$` and block `$$...$$` via KaTeX. Click an equation to edit it in a popover with live preview. ⇧⌘M or the ∑ button inserts inline math.
 - **Mermaid diagrams.** A fenced `mermaid` code block renders as a diagram (or insert one with `/`); click it to edit in a popover with live preview.
 - **Code blocks.** Syntax highlighting with a language picker and one-click copy. Grammars load lazily per language, so they cost nothing until used.
-- **Images.** Paste, drop or insert. Files are saved into an `assets/` folder beside the document and linked relatively; local and remote images render inline. Click an image for a popover (alt text, size, open in Preview, reveal in Finder, copy path), drag its handle to resize, or drag a file in from Finder. (Saved documents only.)
+- **Images.** Paste, drop or insert. Files are saved into an `assets/` folder beside the document and linked relatively; local and remote images render inline. Click an image for a popover (alt text, size, open in Preview, reveal in Finder, copy path), drag its handle to resize, or drag a file in from Finder. An untitled document asks to be saved first, so the image has a folder to go in.
 
 **Editing UX**
 
@@ -146,9 +146,9 @@ These come from the harness in `harness/` (WebKit with a mocked Tauri layer, a p
 | Binary | 5.6 MB | 4.1 MB |
 | Main JS chunk | 941 KB | 675 KB |
 | 200 KB document painted | ~1.4 s | ~0.4–0.5 s |
-| Parse 200 KB of markdown | 5.7 s in one call (130 ms chunked) | ~30 ms |
+| Parse 200 KB of markdown | ~130 ms | ~30 ms |
 
-The parse time is for markdown-it (32 ms under Bun; parse plus serialize takes 26 ms in WebKit). The old parser's lexer was quadratic in input size, which is why large files were slow. The 100 ms startup sleep is also gone.
+The parse time is for markdown-it (32 ms under Bun; parse plus serialize takes 26 ms in WebKit). The old parser had to split large files into chunks to stay fast; markdown-it parses them in one pass. The 100 ms startup sleep is also gone.
 
 Size came from `opt-level = "z"`, woff2-only KaTeX fonts, dropping the deep-link plugin, and recompressed icons. KaTeX and Mermaid are fetched only when a document contains math or a diagram.
 
