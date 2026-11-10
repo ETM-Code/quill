@@ -320,7 +320,9 @@ export class MarkdownParser {
         const inline = tokens[j + 1]
         const content = inline?.type === 'inline' ? this.convertInline(inline) : []
         const p = this.para(content)
-        if (inline?.type === 'inline') inlineSources.set(p, { src: inline.content, ctx: 'cell' })
+        // markdown-it unescapes `\|` in cell content (code spans included), so
+        // every pipe left in it needs its escape back before being reused.
+        if (inline?.type === 'inline') inlineSources.set(p, { src: inline.content.replace(/\|/g, '\\|'), ctx: 'cell' })
         row.push(this.node(t.type === 'th_open' ? 'tableHeader' : 'tableCell', { align: am ? am[1] : null }, [p]))
       }
     }

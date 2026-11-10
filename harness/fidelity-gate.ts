@@ -10,6 +10,11 @@
 //                 load -> save must be byte-identical to the first.
 //    Constructs the oracle can't judge (footnotes, front matter, alerts,
 //    math, details...) have exact expected outputs (fidelity-lib.ts EXACT).
+//    Partial-edit mode (fidelity-partial.ts): one textblock at a time (up to 40
+//    per input, spread evenly) gets a marker appended, then the doc is saved
+//    with preservation on. The result must mean the same as a full
+//    re-serialization, leave every other block byte-identical, and be stable
+//    across reopen + save.
 // 2. The same corpus through the real app in WebKit (quillDebug.setMarkdown /
 //    getMarkdown), which must match the headless results exactly.
 // 3. Browser scenarios (fidelity-interact.ts): C20 undo across files, C26
@@ -21,6 +26,7 @@ import { CASES } from './gap-audit-cases'
 import { EXTRA_CASES } from './fidelity-cases'
 import { EXACT } from './fidelity-lib'
 import { realWorldFiles, runHeadless } from './fidelity-headless'
+import { runPartial } from './fidelity-partial'
 import { runInteract } from './fidelity-interact'
 import { launchQuill, stopDevServer } from './gap-driver'
 
@@ -32,6 +38,16 @@ const head = runHeadless(files)
 for (const f of head.failures) console.log(`FAIL [${f.mode}] ${f.id}\n      ${f.detail}`)
 console.log(`headless: ${head.checked} inputs (${CASES.length} corpus + ${EXTRA_CASES.length} extra + ${EXACT.length} exact + ${files.filter(existsSync).length} real files), ${head.failures.length} failures`)
 failed += head.failures.length
+
+const partialInputs: Array<[string, string]> = [
+  ...CASES, ...EXTRA_CASES, ...EXACT.map(([id, md]) => [id, md] as [string, string]),
+  ...files.filter(existsSync).map(f => [f.replace('/Users/eoghancollins/', '~/'), readFileSync(f, 'utf8')] as [string, string]),
+]
+const partialStart = Date.now()
+const partial = runPartial(partialInputs)
+for (const f of partial.failures) console.log(`FAIL [${f.mode}] ${f.id}\n      ${f.detail}`)
+console.log(`partial-edit: ${partial.checked} single-textblock edits over ${partialInputs.length} inputs, ${partial.failures.length} failures (${((Date.now() - partialStart) / 1000).toFixed(1)}s)`)
+failed += partial.failures.length
 
 if (!process.argv.includes('--skip-browser')) {
   console.log('\n== 2. app path in WebKit')

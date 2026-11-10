@@ -5,6 +5,7 @@ import { canonicalLanguage, looksLikeMarkdown, quillSchema } from './editor-setu
 import { getCodec } from './markdown'
 import { parseDelimited, codeOnlyText } from './markdown/clipboard'
 import { Slice } from '@tiptap/pm/model'
+import { Transform } from '@tiptap/pm/transform'
 
 const schema = quillSchema()
 const codec = getCodec(schema)
@@ -88,6 +89,20 @@ describe('tables', () => {
     const out = fresh('| a | b |\n|---|---|\n| `x \\| y` | z \\| w |\n')
     const cell = codec.parse(out).doc.firstChild!.child(1).child(0)
     expect(cell.textContent).toBe('x | y')
+  })
+  test('editing a table keeps escaped pipes in untouched cells', () => {
+    const { doc, info } = codec.parse('| Name | Qty |\n|:-----|----:|\n| a \\| b `c \\| d` | 1 |\n')
+    let pos = -1
+    doc.descendants((n, p) => {
+      if (n.isText && n.text === '1') pos = p + 1
+    })
+    const edited = new Transform(doc).insert(pos, schema.text('0')).doc
+    const out = codec.serialize(edited, { load: info })
+    expect(out).toContain('a \\| b `c \\| d`')
+    expect(out).toContain('10')
+    const row = codec.parse(out).doc.firstChild!.child(1)
+    expect(row.childCount).toBe(2)
+    expect(row.child(0).textContent).toBe('a | b c | d')
   })
   test('empty cells stay empty, alignment kept', () => {
     expect(fresh('| L | R |\n|:--|--:|\n|  | 2 |\n')).toBe('| L   | R   |\n| :-- | --: |\n|     | 2   |\n')
