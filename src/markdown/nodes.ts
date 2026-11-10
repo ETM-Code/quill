@@ -5,7 +5,7 @@
 // fence, tight/loose, link form...). Also: GitHub alert callouts and Enter in
 // table cells.
 import { Extension, Mark, Node, mergeAttributes } from '@tiptap/core'
-import { Plugin, PluginKey } from '@tiptap/pm/state'
+import { Plugin, PluginKey, type EditorState } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as PMNode } from '@tiptap/pm/model'
 import { htmlToText, sanitizeHtml, sanitizeHtmlSync } from './sanitize'
@@ -327,26 +327,38 @@ export const Kbd = simpleMark('kbd', 'kbd')
 const CALLOUT_RE = /^\[!([A-Za-z]+)\]([+-]?)/
 const calloutKey = new PluginKey('quillCallouts')
 
-function calloutDecorations(doc: PMNode): DecorationSet {
-  const decos: Decoration[] = []
+/** Marker positions [from, to) of every callout, for the editing check. */
+function calloutMarkers(doc: PMNode): Array<{ pos: number; node: PMNode; kind: string; from: number; to: number }> {
+  const found: Array<{ pos: number; node: PMNode; kind: string; from: number; to: number }> = []
   doc.descendants((node, pos) => {
     if (node.type.name === 'blockquote') {
       const first = node.firstChild
       const text = first?.firstChild
       if (first?.type.name === 'paragraph' && text?.isText) {
         const m = CALLOUT_RE.exec(text.text!)
-        if (m) {
-          const kind = m[1].toLowerCase()
-          decos.push(Decoration.node(pos, pos + node.nodeSize, { class: `md-callout md-callout-${kind}`, 'data-callout': kind }))
-          decos.push(Decoration.inline(pos + 2, pos + 2 + m[0].length, { class: 'md-callout-marker' }))
-        }
+        if (m) found.push({ pos, node, kind: m[1].toLowerCase(), from: pos + 2, to: pos + 2 + m[0].length })
       }
       return true
     }
     // Only containers can hold blockquotes.
     return !node.isTextblock && !node.isAtom
   })
-  return DecorationSet.create(doc, decos)
+  return found
+}
+
+// The "[!NOTE]" marker shows as a "Note" label; the raw marker comes back
+// while the caret is on that line so it can still be edited.
+function calloutDecorations(state: EditorState): DecorationSet {
+  const decos: Decoration[] = []
+  const { from, to } = state.selection
+  for (const c of calloutMarkers(state.doc)) {
+    const firstLineEnd = c.pos + 1 + c.node.firstChild!.nodeSize
+    const editing = to >= c.from && from <= firstLineEnd
+    const label = c.kind.charAt(0).toUpperCase() + c.kind.slice(1)
+    decos.push(Decoration.node(c.pos, c.pos + c.node.nodeSize, { class: `md-callout md-callout-${c.kind}`, 'data-callout': c.kind }))
+    decos.push(Decoration.inline(c.from, c.to, { class: editing ? 'md-callout-marker md-callout-editing' : 'md-callout-marker', 'data-label': label }))
+  }
+  return DecorationSet.create(state.doc, decos)
 }
 
 export const Callouts = Extension.create({
@@ -356,8 +368,8 @@ export const Callouts = Extension.create({
       new Plugin({
         key: calloutKey,
         state: {
-          init: (_, state) => calloutDecorations(state.doc),
-          apply: (tr, old) => (tr.docChanged ? calloutDecorations(tr.doc) : old),
+          init: (_, state) => calloutDecorations(state),
+          apply: (tr, old, _oldState, newState) => (tr.docChanged || tr.selectionSet ? calloutDecorations(newState) : old),
         },
         props: {
           decorations(state) {

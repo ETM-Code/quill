@@ -546,6 +546,10 @@ export function createQuillEditor(element: HTMLElement, callbacks: EditorCallbac
       attributes: {
         class: 'tiptap',
         spellcheck: 'true',
+        // macOS auto-capitalise/autocorrect rewrite commands, identifiers
+        // and table cells as you type; spelling underlines stay.
+        autocorrect: 'off',
+        autocapitalize: 'off',
       },
       // text/plain: markdown (raw code for an all-code selection) so pasting
       // into other apps keeps structure. text/html: rich HTML other apps can

@@ -447,10 +447,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   updateWordCount()
   editor.view.focus()
-  // WebKit can resync an odd whole-document selection on programmatic focus;
-  // make sure boot always starts from a collapsed caret.
-  if (!(editor.state.selection instanceof TextSelection)) {
-    editor.commands.setTextSelection(0)
+  // WebKit can resync an odd whole-document selection on programmatic focus,
+  // and a leading atom (front matter) would take a node selection: start
+  // from a caret in the first text block, scrolled to the top.
+  if (!params.get('anchor')) {
+    let first = -1
+    editor.state.doc.descendants((node, pos) => {
+      if (first < 0 && node.isTextblock) first = pos + 1
+      return first < 0
+    })
+    if (first > 0) {
+      editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, first)))
+    }
+    requestAnimationFrame(() => {
+      document.getElementById('editor-container')?.scrollTo(0, 0)
+    })
   }
 
   // When the OS window regains focus with nothing else focused in the page,
