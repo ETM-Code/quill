@@ -6,13 +6,13 @@
 
 <p align="center">
   Open any markdown file instantly as a real document.<br/>
-  Notion-style WYSIWYG editing with LaTeX math, Mermaid diagrams, tables, and a ~5.5 MB download.
+  Notion-style WYSIWYG editing with LaTeX math, Mermaid diagrams, tables, and a ~5 MB app.
 </p>
 
 <p align="center">
   Most of what LLMs produce is markdown, and in 2026 opening a lone <code>.md</code> as a real document
   (not raw source) turned into a small rush of tools. Quill's cut: native, block-style WYSIWYG, fully
-  open source down to the editor, a few megabytes, and also a VS Code extension. Double-click a markdown
+  open source down to the editor, about 5 MB, and also a VS Code extension. Double-click a markdown
   file and it renders instantly as an editable document. No vault, no Electron.
 </p>
 
@@ -63,32 +63,43 @@ The `.app` and `.dmg` land in `src-tauri/target/release/bundle/`. Requires [Bun]
 
 ## Features
 
+**Safe to open and save**
+
+- **Unedited text is written back byte for byte.** Quill keeps the original source of every block, so opening and saving a file never rewrites parts you didn't touch. That includes blank-line runs, a missing final newline, CRLF line endings and link reference definitions. Edited blocks keep their meaning, and a second save matches the first.
+- **Checked on real drafts.** `harness/fidelity-gate.ts` round-trips 236 inputs, including 60 real Claude-written files, and fails on any change.
+- **External changes.** If the file changes on disk, Quill reloads it when you have no unsaved edits and warns, keeping your edits, when you do.
+
 **Writing**
 
-- **WYSIWYG markdown** — Write in rich text, save as plain `.md`. Headings, bold, italic, underline, strikethrough, lists, blockquotes, code, links.
-- **Tables** — GFM tables render and edit inline; row/column controls appear in the toolbar when the caret is inside one.
-- **Task lists** — `- [ ]` checkboxes, clickable, round-trip faithfully.
-- **LaTeX math** — Inline `$E=mc^2$` and block `$$...$$` via KaTeX. Click an equation to edit it in a popover with live preview.
-- **Mermaid diagrams** — A fenced `mermaid` code block renders as a diagram (or insert one with `/`); click it to edit in a popover with live preview.
-- **Code blocks** — Syntax highlighting with a language picker and one-click copy. Grammars load lazily per language, so they cost nothing until used.
-- **Images** — Paste, drop, or insert. Files are saved into an `assets/` folder beside the document and linked relatively; local and remote images render inline. (Saved documents only.)
+- **WYSIWYG markdown.** Write in rich text, save as plain `.md`. Headings, bold, italic, underline, strikethrough, highlight, sub/sup/kbd, lists, blockquotes, code, links.
+- **Beyond CommonMark.** Front matter shows as a collapsed Properties block. Footnotes, GitHub alert callouts (`> [!NOTE]`), `<details>` with editable content, `==highlight==` and `<sub>`, `<sup>`, `<kbd>` are supported. Other raw HTML is kept as written and shown sanitised.
+- **Tables.** GFM tables render and edit inline. Set column alignment, add rows and columns on hover, move or delete them.
+- **Task lists.** `- [ ]` checkboxes, clickable, round-trip faithfully.
+- **LaTeX math.** Inline `$E=mc^2$` and block `$$...$$` via KaTeX. Click an equation to edit it in a popover with live preview. ⇧⌘M or the ∑ button inserts inline math.
+- **Mermaid diagrams.** A fenced `mermaid` code block renders as a diagram (or insert one with `/`); click it to edit in a popover with live preview.
+- **Code blocks.** Syntax highlighting with a language picker and one-click copy. Grammars load lazily per language, so they cost nothing until used.
+- **Images.** Paste, drop or insert. Files are saved into an `assets/` folder beside the document and linked relatively; local and remote images render inline. Click an image for a popover (alt text, size, open in Preview, reveal in Finder, copy path), drag its handle to resize, or drag a file in from Finder. (Saved documents only.)
 
 **Editing UX**
 
-- **Formatting toolbar** — Select text and a Notion-style bubble menu appears: turn-into dropdown, marks, link.
-- **Slash commands** — Type `/` on an empty line to insert any block: headings, lists, tables, math, diagrams, dividers, code.
-- **Links that work** — Click for a popover (open / edit / remove), ⌘-click to open, ⌘K to create one from a selection. Pasted URLs onto selections become links.
-- **Find & replace** — ⌘F to find, ⌘⌥F to replace, with live match highlighting.
-- **Markdown clipboard** — Copy puts markdown on the clipboard; pasting markdown text recreates rich blocks.
+- **Formatting toolbar.** Select text and a Notion-style bubble menu appears: turn-into dropdown, marks, link.
+- **Slash commands.** Type `/` on an empty line to insert any block: headings, lists, tables, math, diagrams, dividers, code.
+- **Links that work.** Click for a popover (open / edit / remove), ⌘K to create one from a selection, and paste a URL onto a selection to link it. ⌘-click opens a link: web links in the browser, `.md` links in Quill, local files in their app. `#anchor` links scroll to the heading.
+- **Find & replace.** ⌘F to find, ⌥⌘F to replace, with live match highlighting.
+- **Markdown source view.** ⌘/ switches between the rendered document and its markdown.
+- **Outline.** ⇧⌘O opens a heading outline you can jump from.
+- **Print / PDF.** ⌘P.
+- **Copy and paste.** Copying code gives the raw text. Copying anything else puts markdown and rich HTML on the clipboard, and Edit > Copy as Plain Text (⌥⇧⌘C) copies it without formatting. Pasting markdown recreates rich blocks, and code and tables pasted from VS Code, spreadsheets (TSV/CSV, Excel) and chat apps come in as code blocks and tables.
+- **Autocorrect off.** macOS autocorrect and auto-capitalisation are disabled, so commands and identifiers aren't rewritten as you type.
 
 **App behavior**
 
-- **Native menu bar** — File / Edit / Window menus with Open Recent and all standard shortcuts.
-- **Unsaved-changes guards** — Closing a dirty window or quitting with unsaved work asks first.
-- **Crash-safe drafts** — Unsaved work is checkpointed every couple of seconds; on relaunch Quill offers to restore it.
-- **Light & dark mode** — Follows the system appearance.
-- **Native macOS** — Overlay titlebar, file associations for `.md`, `.markdown`, `.txt`, word count in the titlebar.
-- **Tiny footprint** — ~7 MB app bundle, ~5.5 MB DMG.
+- **Native menu bar.** File / Edit / Format / View / Window menus with Open Recent. Every shortcut below is in a menu.
+- **Unsaved-changes guards.** Closing a dirty window or quitting with unsaved work asks first.
+- **Crash-safe drafts.** Unsaved work is checkpointed every couple of seconds; on relaunch Quill offers to restore it.
+- **Light & dark mode.** Follows the system appearance.
+- **Native macOS.** Overlay titlebar, file associations for `.md`, `.markdown`, `.txt`, word count in the titlebar.
+- **Tiny footprint.** The app bundle is about 5.2 MB.
 
 ## How Quill compares
 
@@ -104,7 +115,7 @@ Opening a lone `.md` as a real document instead of raw source went from a gap to
 
 | Tool | Editing | Tech / size | Open source | Price | Angle |
 |---|---|---|---|---|---|
-| **Quill** | Block WYSIWYG | Tauri, ~7 MB | Yes, MIT (editor included) | Free | Math, Mermaid, code, tables, tasks, images; VS Code twin |
+| **Quill** | Block WYSIWYG | Tauri, ~5 MB | Yes, MIT (editor included) | Free | Math, Mermaid, code, tables, tasks, images, byte-exact saves; VS Code twin |
 | **MarkViewer** | Inline WYSIWYG | Native, Universal | No (binaries only) | Free | AI-review loop; shipped Dec 2025, very active |
 | **DOMD** | Inline WYSIWYG | Tauri, ~8.5 MB | App MIT, engine noncommercial | Free | 20 KB custom kernel, live AI token streaming, CLI |
 | **MacMD Viewer** | Read-only | Native SwiftUI, ~18 MB | No | $19.99 | QuickLook + auto-refresh when an agent rewrites the file |
@@ -127,26 +138,30 @@ Quill isn't the only instant opener anymore, and it isn't the most mature: MarkV
 
 ## Performance
 
-Measured on an Apple M3 (release build, `harness/smoke-macos.sh`; timings include `open(1)` and polling overhead, so true figures are slightly better):
+These come from the harness in `harness/` (WebKit with a mocked Tauri layer, a production build, and `harness/launch-timing-headless.py` for the real app). They are medians measured on a loaded machine, so small differences are noise. Details are in `docs/perf-size.md`.
 
-| Scenario | Time |
-|---|---:|
-| Warm launch → window visible | ~0.8–0.9 s |
-| Open a 14 KB document into the running app | ~0.4–0.6 s |
-| Open a 209 KB document into the running app | ~0.6–0.9 s |
-| Reopen after closing last window (keepalive) | ~0.3 s |
+| Measure | Before | Now |
+|---|---:|---:|
+| Quill.app | 6.9 MB | 5.2 MB |
+| Binary | 5.6 MB | 4.1 MB |
+| Main JS chunk | 941 KB | 675 KB |
+| 200 KB document painted | ~1.4 s | ~0.4–0.5 s |
+| Parse 200 KB of markdown | 5.7 s in one call (130 ms chunked) | ~30 ms |
 
-The 209 KB case used to take 2.3 s+: marked's lexer is quadratic in input size, so Quill splits large documents at safe top-level boundaries (never inside fences, lists, quotes, or tables, verified byte-identical against whole-document parsing) and parses each chunk independently. 209 KB now parses in ~450 ms instead of 5.7 s.
+The parse time is for markdown-it (32 ms under Bun; parse plus serialize takes 26 ms in WebKit). The old parser's lexer was quadratic in input size, which is why large files were slow. The 100 ms startup sleep is also gone.
+
+Size came from `opt-level = "z"`, woff2-only KaTeX fonts, dropping the deep-link plugin, and recompressed icons. KaTeX and Mermaid are fetched only when a document contains math or a diagram.
 
 ## How it works
 
-Quill is a [Tauri 2](https://tauri.app) app: Rust backend, frontend in the system WebKit view (no bundled browser engine). The editor is [Tiptap](https://tiptap.dev) (ProseMirror) with the [Markdown extension](https://tiptap.dev/docs/extensions/markdown) for round-trip `.md` serialization.
+Quill is a [Tauri 2](https://tauri.app) app: Rust backend, frontend in the system WebKit view (no bundled browser engine). The editor is [Tiptap](https://tiptap.dev) (ProseMirror). Markdown goes through its own layer in `src/markdown/`: a [markdown-it](https://github.com/markdown-it/markdown-it) parser, a serializer adapted from [prosemirror-markdown](https://github.com/ProseMirror/prosemirror-markdown), and source preservation, which keeps the original text of each block so unedited blocks are saved byte for byte. The choice and measurements are in `docs/markdown-engine.md`.
 
 **Key design choices:**
 
 - **One editor instance for the window's lifetime** — syntax-highlight grammars register into the live lowlight instance per language on demand (each its own ~1–8 KB chunk) rather than recreating the editor, so undo history survives.
-- **Chunked markdown parsing** — sidesteps marked's quadratic lexer on large files (see Performance).
-- **Markdown-native math** — `$...$` is parsed by the Mathematics extension's own tokenizer during parsing; no post-parse rewriting.
+- **Source preservation** — every top-level block, and the inline source of each paragraph, heading and table cell, is kept. ProseMirror replaces only edited nodes, so the serializer only has to be correct for text you changed.
+- **Lazy KaTeX and Mermaid** — math shows its LaTeX source at once and is typeset when the engine loads; neither library is fetched for a document that doesn't use it. DOMPurify loads only when a document has raw HTML.
+- **Markdown-native math** — `$...$` is parsed by the markdown layer itself; no post-parse rewriting.
 - **Blank keepalive window** — a hidden, JS-free page keeps the process alive after the last editor window closes, so reopening is ~0.3 s.
 - **Custom Quit menu item** — the predefined one sends `terminate:` directly, bypassing Tauri's exit events and skipping the unsaved-changes guard.
 - **Window URL params** — files opened via file association pass through URL query params, avoiding IPC races at startup.
@@ -155,7 +170,8 @@ Quill is a [Tauri 2](https://tauri.app) app: Rust backend, frontend in the syste
 quill/
 ├── src/                    # Frontend (TypeScript, no framework)
 │   ├── main.ts             # Boot, wiring, shortcuts, menu events
-│   ├── editor-setup.ts     # Tiptap extensions, lazy grammars, chunked parse, clipboard
+│   ├── editor-setup.ts     # Tiptap extensions, lazy grammars, editor wiring
+│   ├── markdown/           # markdown-it parser, serializer, source preservation, clipboard
 │   ├── file-ops.ts         # Open/save/dirty/recents/drafts/close guard
 │   ├── images.ts           # Image paste/drop, assets/ writes, markdown round-trip
 │   ├── mermaid.ts          # Mermaid diagram node + lazy renderer
@@ -174,14 +190,25 @@ quill/
 | `⌘S` / `⇧⌘S` | Save / Save As |
 | `⌘O` | Open |
 | `⌘N` / `⇧⌘N` | New / New Window |
+| `⌘P` | Print / Export PDF |
 | `⌘F` / `⌥⌘F` | Find / Find & Replace |
-| `⌘K` | Add or edit link on selection |
-| `⌘B` `⌘I` `⌘U` `⌘E` | Bold, italic, underline, inline code |
 | `⌘Z` / `⇧⌘Z` | Undo / Redo |
+| `⌥⇧⌘C` | Copy as Plain Text |
+| `⌘/` | Markdown source view |
+| `⇧⌘O` | Outline |
+| `⌘B` `⌘I` `⌘U` `⌘E` | Bold, italic, underline, inline code |
+| `⇧⌘X` `⇧⌘H` | Strikethrough, highlight |
+| `⇧⌘M` | Inline math |
+| `⌘K` | Add or edit link on selection |
+| `⌘\` | Clear formatting |
+| `⌘0` – `⌘6` | Paragraph, headings 1–6 |
+| `⇧⌘7` `⇧⌘8` `⇧⌘9` | Numbered, bulleted, task list |
+| `⇧⌘B` | Quote |
+| `⌥⌘C` | Code block |
+| `⌥⌘T` | Insert table |
 | `/` | Slash command menu (on empty line) |
-| `# ` `- ` `1. ` `> ` | Heading, bullet, numbered, quote |
-| ``` ``` ``` | Code block |
-| `$...$` / `$$...$$` | Inline / block math |
+
+Markdown typing shortcuts also work: `# `, `- `, `1. `, `> `, a code fence, and `$...$` / `$$...$$` for math.
 
 ## Development
 
@@ -196,14 +223,16 @@ bun run tauri build # Production build
 **Tests:**
 
 ```bash
-bun test                    # Unit tests (markdown chunking, startup files)
-bun harness/features.ts     # End-to-end UI flows in real WebKit (Playwright + Tauri IPC mock)
-bun harness/audit.ts        # Round-trip fidelity + rendering audit
+bun test                      # Unit tests (markdown layer, inline math, startup files)
+bun harness/fidelity-gate.ts  # Markdown fidelity gate: byte-identical open/save on the corpus and real drafts
+bun harness/features.ts       # End-to-end UI flows in real WebKit (Playwright + Tauri IPC mock)
+bun harness/ux-all.ts         # UX suites: links, images, editing, tables, views
+bun harness/audit.ts          # Round-trip fidelity + rendering audit
 bash harness/smoke-macos.sh # Packaged-app smoke test: launch, file assoc, keepalive, quit
 cd src-tauri && cargo test  # Backend tests
 ```
 
-The harness runs the real frontend in Playwright WebKit with the Tauri IPC layer mocked (`harness/tauri-mock.js`), so dialogs, saves, and the opener are scriptable. The smoke test drives the actual packaged `.app`.
+The harness suites need Playwright's WebKit browser (`bunx playwright install webkit`). They run the real frontend in Playwright WebKit with the Tauri IPC layer mocked (`harness/tauri-mock.js`), so dialogs, saves, and the opener are scriptable. The smoke test drives the actual packaged `.app`.
 
 ## License
 
