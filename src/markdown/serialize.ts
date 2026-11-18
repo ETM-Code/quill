@@ -18,6 +18,8 @@ export interface SerializeOptions {
   /** The load whose separators / head / tail apply. */
   load?: LoadInfo | null
   linkify?: LinkifyIt
+  /** Write soft line breaks as spaces (clipboard text) instead of newlines. */
+  joinSoftBreaks?: boolean
 }
 
 type Ctx = 'block' | 'cell' | 'heading'
@@ -620,7 +622,7 @@ const INLINE: Record<string, InlineFn> = {
     s.text(node.text!)
   },
   softBreak(s) {
-    if (s.ctx === 'block') s.newline()
+    if (s.ctx === 'block' && !s.opts.joinSoftBreaks) s.newline()
     else s.raw(' ')
   },
   hardBreak(s, node) {
@@ -906,7 +908,10 @@ export function serializeDoc(doc: PMNode, opts: SerializeOptions = {}): string {
   return out
 }
 
-/** Markdown for a slice of content (clipboard). */
+/**
+ * Markdown for a slice of content (clipboard). Soft breaks become spaces and
+ * no original source is reused, so a hard-wrapped paragraph pastes as one line.
+ */
 export function serializeFragment(doc: PMNode, opts: SerializeOptions = {}): string {
-  return serializeDoc(doc, { ...opts, load: null }).replace(/\n+$/, '')
+  return serializeDoc(doc, { ...opts, load: null, preserve: false, joinSoftBreaks: true }).replace(/\n+$/, '')
 }
