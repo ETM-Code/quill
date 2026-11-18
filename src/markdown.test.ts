@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { canonicalLanguage, looksLikeMarkdown, quillSchema } from './editor-setup'
 import { getCodec } from './markdown'
-import { parseDelimited, codeOnlyText } from './markdown/clipboard'
+import { parseDelimited, codeOnlyText, clipboardText } from './markdown/clipboard'
 import { Slice } from '@tiptap/pm/model'
 import { Transform } from '@tiptap/pm/transform'
 
@@ -169,6 +169,12 @@ describe('clipboard helpers', () => {
     expect(parseDelimited('a\tb\n1\t2\n')).toEqual([['a', 'b'], ['1', '2']])
     expect(parseDelimited('name,qty\napple,3\n')).toEqual([['name', 'qty'], ['apple', '3']])
     expect(parseDelimited('Hello there, this is a sentence.\nAnother line, here.')).toBeNull()
+  })
+  test('a hard-wrapped paragraph copies as one line', () => {
+    const { doc } = codec.parse('one two\nthree four\n\n- item wraps\n  here\n')
+    expect(clipboardText(schema, doc.slice(0, doc.content.size))).toBe('one two three four\n\n- item wraps here')
+    // A selection inside the paragraph that crosses the soft break.
+    expect(clipboardText(schema, doc.slice(5, 14, true))).toBe('two three')
   })
   test('code-only selections copy raw code', () => {
     const code = 'cargo build \\\n  --flag "quoted" $VAR\n\tdone'

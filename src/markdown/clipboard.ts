@@ -219,9 +219,56 @@ export function richClipboardSerializer(schema: Schema): DOMSerializer {
     pre.appendChild(code)
     return { dom: pre, contentDOM: code }
   }
-  const ser = new DOMSerializer(nodes, marks)
+  const ser = new InlineAwareSerializer(nodes, marks)
   cachedSerializer = { schema, ser }
   return ser
+}
+
+/**
+ * A selection inside one paragraph is written as inline HTML in a span.
+ * Notes, Mail, Word and other rich-text apps paste a <p> as a paragraph of
+ * its own, which adds a line break before and after a few copied words.
+ * Only the top-level call is changed; nested content keeps its blocks.
+ */
+class InlineAwareSerializer extends DOMSerializer {
+  private depth = 0
+
+  override serializeFragment(
+    fragment: Fragment,
+    options: { document?: Document } = {},
+    target?: HTMLElement | DocumentFragment,
+  ): HTMLElement | DocumentFragment {
+    const top = this.depth === 0
+    this.depth++
+    try {
+      if (top) fragment = trimEmptyParagraphs(fragment)
+      const only = fragment.childCount === 1 ? fragment.firstChild! : null
+      if (top && only?.type.name === 'paragraph' && only.childCount > 0) {
+        const doc = options.document ?? document
+        const span = doc.createElement('span')
+        span.setAttribute(INLINE_COPY_ATTR, '')
+        super.serializeFragment(only.content, options, span)
+        const out = target ?? doc.createDocumentFragment()
+        out.appendChild(span)
+        return out
+      }
+      return super.serializeFragment(fragment, options, target)
+    } finally {
+      this.depth--
+    }
+  }
+}
+
+const INLINE_COPY_ATTR = 'data-quill-inline'
+
+/** Drop empty paragraphs at either end (the one kept after a final code block pastes as a blank line). */
+function trimEmptyParagraphs(fragment: Fragment): Fragment {
+  const nodes: PMNode[] = []
+  fragment.forEach(n => nodes.push(n))
+  const empty = (n: PMNode | undefined) => n?.type.name === 'paragraph' && n.childCount === 0
+  while (nodes.length > 1 && empty(nodes[nodes.length - 1])) nodes.pop()
+  while (nodes.length > 1 && empty(nodes[0])) nodes.shift()
+  return nodes.length === fragment.childCount ? fragment : Fragment.from(nodes)
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +417,10 @@ export function handleMarkdownPaste(view: EditorView, event: ClipboardEvent): bo
 export function cleanPastedHtml(html: string): string {
   if (typeof DOMParser === 'undefined') return html
   const doc = new DOMParser().parseFromString(html, 'text/html')
+  // Our own copy of text inside one paragraph: drop ProseMirror's slice
+  // marker so the span parses as inline content at the caret, without
+  // splitting the paragraph it lands in.
+  doc.querySelectorAll(`span[${INLINE_COPY_ATTR}]`).forEach(span => span.removeAttribute('data-pm-slice'))
   // Our own image copies carry the original markdown src.
   doc.querySelectorAll('img[data-quill-src]').forEach(img => img.setAttribute('src', img.getAttribute('data-quill-src')!))
   // ChatGPT / Claude web: <pre><div>bash</div><div><code>…</code></div></pre>
